@@ -33,6 +33,7 @@ public final class SettingsActivity extends Activity {
     private String badgeBackground = "dark";
     private EditText modelField, keyField, labelField;
     private Switch enabledSwitch;
+    private Switch diagnosticSwitch;
     private TextView slotStatus, connectionStatus, previewBadge, previewButton;
     private FrameLayout preview;
     private LinearLayout slotGrid;
@@ -95,6 +96,7 @@ public final class SettingsActivity extends Activity {
         keys.addView(button("Cek semua slot aktif", false, this::checkAllKeys));
         keys.addView(text("Strategi: Round Robin", 15, LAVENDER, true));
         keys.addView(text("Setiap analisis memulai dari slot berikutnya. HTTP 429 memberi cooldown 60 detik.", 13, MUTED, false)); showSlot();
+        diagnosticSwitch = new Switch(this); diagnosticSwitch.setText("Aktifkan diagnostic log (tanpa key/soal/jawaban)"); diagnosticSwitch.setTextColor(PALE); diagnosticSwitch.setChecked(config.optBoolean("diagnostic", false)); keys.addView(diagnosticSwitch);
 
         LinearLayout floating = card(body, "⚙  Floating Button Config");
         floating.addView(text("Pratinjau langsung tombol dan jawaban", 14, MUTED, false));
@@ -107,7 +109,7 @@ public final class SettingsActivity extends Activity {
         previewButton = text("◎", 30, Color.WHITE, false); previewButton.setGravity(Gravity.CENTER);
         previewButton.setBackground(round(colorFor(buttonColor), 28, 0)); preview.addView(previewButton);
         floating.addView(button("Preview jawaban: 1 → 1,2 → ✓", false, () -> { sample = (sample + 1) % 3; renderPreview(); }));
-        slider(floating, "Transparansi tombol", 15, 100, buttonOpacity, v -> buttonOpacity = v);
+        slider(floating, "Transparansi tombol", 0, 100, buttonOpacity, v -> buttonOpacity = v);
         slider(floating, "Ukuran tombol (dp)", 32, 88, buttonSize, v -> buttonSize = v);
         floating.addView(button("Pindah tombol kiri / kanan", false, () -> { buttonSide = buttonSide.equals("right") ? "left" : "right"; renderPreview(); }));
         floating.addView(text("Warna tombol", 14, PALE, true));
@@ -117,7 +119,7 @@ public final class SettingsActivity extends Activity {
             LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, dp(44), 1); sp.setMargins(dp(2), dp(2), dp(2), dp(2)); colors.addView(swatch, sp); swatch.setOnClickListener(v -> { buttonColor = name; renderPreview(); }); }
         renderPreview();
         LinearLayout badge = card(body, "⚙  Answer Popup Appearance");
-        slider(badge, "Transparansi jawaban", 15, 100, badgeOpacity, v -> badgeOpacity = v);
+        slider(badge, "Transparansi jawaban", 0, 100, badgeOpacity, v -> badgeOpacity = v);
         slider(badge, "Ukuran teks (sp)", 8, 24, badgeSize, v -> badgeSize = v);
         slider(badge, "Posisi dari bawah (dp)", 24, 240, badgeBottom, v -> badgeBottom = v);
         badge.addView(text("Latar badge", 14, PALE, true));
@@ -202,6 +204,7 @@ public final class SettingsActivity extends Activity {
             storeCurrentSlot();
             String model = modelField.getText().toString().trim(); if (!model.matches("[A-Za-z0-9._-]{3,100}")) { toast("Nama model tidak valid"); return; }
             config.put("model", model).put("strategy", "round_robin");
+            config.put("diagnostic", diagnosticSwitch != null && diagnosticSwitch.isChecked());
             JSONObject badge = config.optJSONObject("badge"); if (badge == null) badge = new JSONObject();
             badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("background", badgeBackground); config.put("badge", badge);
             JSONObject button = config.optJSONObject("button"); if (button == null) button = new JSONObject();

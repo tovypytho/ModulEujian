@@ -156,6 +156,7 @@ public final class CaptureModule {
     }
 
     private void onTrigger(long duration) {
+        android.util.Log.i("EujianDiag", "trigger duration=" + duration);
         attachDismissListener((View) activity.getWindow().getDecorView());
         if (busy) { show("…", 2500); return; }
         final Config config;
@@ -279,6 +280,7 @@ public final class CaptureModule {
     }
 
     private void processCapture(Bitmap bitmap, Config config, boolean longPress, boolean stageTwo) {
+        diag(config, "capture stageTwo=" + stageTwo + " bytesPending");
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, config.jpegQuality, out)) throw new Exception("JPEG gagal");
@@ -299,6 +301,7 @@ public final class CaptureModule {
             staged = null;
             show("…", 15000);
             Answer answer = askGemini(config, images);
+            diag(config, "gemini success kind=" + answer.kind + " images=" + images.size());
             if (answer.kind.equals("FREE_RESPONSE")) {
                 activity.runOnUiThread(() -> {
                     ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -311,6 +314,7 @@ public final class CaptureModule {
                 show(answer.text, 9000);
             }
         } catch (Exception ex) {
+            diag(config, "gemini error=" + errorBadge(ex));
             show(errorBadge(ex), 7000);
         } finally {
             busy = false;
@@ -349,6 +353,9 @@ public final class CaptureModule {
         if (http.find()) return http.group();
         if (message.contains("Semua key")) return "KEY!";
         return "!";
+    }
+    private void diag(Config config, String message) {
+        if (config != null && config.diagnostic) android.util.Log.i("EujianDiag", message);
     }
     private int parseColor(String name) {
         if ("white".equals(name)) return 0xCCF5F5F5;
@@ -431,12 +438,12 @@ public final class CaptureModule {
         cfg.buttonSizeDp = buttonCfg == null ? 52 : buttonCfg.optInt("sizeDp", 52);
         cfg.buttonSide = buttonCfg == null ? "right" : buttonCfg.optString("side", "right");
         cfg.buttonColor = parseColor(buttonCfg == null ? "dark" : buttonCfg.optString("color", "dark"));
-        if (cfg.badgeOpacity < 0.15f || cfg.badgeOpacity > 1.0f
+        if (cfg.badgeOpacity < 0.0f || cfg.badgeOpacity > 1.0f
                 || cfg.badgeTextSizeSp < 8 || cfg.badgeTextSizeSp > 24
                 || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000
                 || cfg.badgeBottomOffsetDp < 24 || cfg.badgeBottomOffsetDp > 400
                 || (!cfg.badgeBackground.equals("none") && !cfg.badgeBackground.equals("dark") && !cfg.badgeBackground.equals("light"))
-                || cfg.buttonOpacity < 0.15f || cfg.buttonOpacity > 1.0f
+                || cfg.buttonOpacity < 0.0f || cfg.buttonOpacity > 1.0f
                 || cfg.buttonSizeDp < 32 || cfg.buttonSizeDp > 88
                 || (!cfg.buttonSide.equals("left") && !cfg.buttonSide.equals("right")))
             throw new Exception("Pengaturan badge tidak valid");
@@ -450,6 +457,7 @@ public final class CaptureModule {
             if (k.optBoolean("enabled", false) && !secret.isEmpty() && !secret.equals("PASTE_KEY_HERE"))
                 cfg.keys.add(secret);
         }
+        cfg.diagnostic = obj.optBoolean("diagnostic", false);
         return cfg;
     }
 
@@ -591,6 +599,7 @@ public final class CaptureModule {
         String buttonSide;
         int buttonColor;
         String badgeBackground;
+        boolean diagnostic;
         final ArrayList<String> keys = new ArrayList<>();
     }
     private static final class Answer {

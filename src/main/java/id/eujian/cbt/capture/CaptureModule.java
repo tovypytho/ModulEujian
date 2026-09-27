@@ -63,6 +63,7 @@ public final class CaptureModule {
     private volatile long stagedAt;
     private long touchDown;
     private int keyCursor;
+    private volatile int badgeDurationMs = 3500;
     private final Map<String, Long> cooldowns = new HashMap<>();
 
     public static void install(final Activity activity) {
@@ -99,14 +100,16 @@ public final class CaptureModule {
         decor.addView(button, bp);
         status = new TextView(activity);
         status.setTextColor(Color.WHITE);
-        status.setTextSize(14);
-        status.setPadding(dp(12), dp(8), dp(12), dp(8));
+        status.setTextSize(12);
+        status.setMaxWidth(dp(160));
+        status.setPadding(dp(7), dp(4), dp(7), dp(4));
         status.setGravity(Gravity.CENTER);
-        status.setBackground(round(0xDB182027, 12));
+        status.setAlpha(0.55f);
+        status.setBackground(round(0xCC182027, 8));
         status.setVisibility(View.GONE);
         hideStatus = () -> status.setVisibility(View.GONE);
-        FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
-        sp.topMargin = dp(64);
+        FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        sp.bottomMargin = dp(120);
         decor.addView(status, sp);
         button.setOnTouchListener((v, e) -> {
             if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
@@ -122,7 +125,7 @@ public final class CaptureModule {
         });
         worker.execute(() -> {
             try { ensureConfig(); }
-            catch (Exception ex) { show("Konfigurasi gagal: " + safeMessage(ex), 7000); }
+            catch (Exception ex) { show("CFG", 7000); }
         });
     }
 
@@ -135,10 +138,13 @@ public final class CaptureModule {
     }
 
     private void onTrigger(long duration) {
-        if (busy) { show("Analisis sebelumnya masih berjalan", 2500); return; }
+        if (busy) { show("…", 2500); return; }
         final Config config;
         try { config = readConfig(); }
-        catch (Exception ex) { show("Periksa Download/E-Ujian/config.json: " + safeMessage(ex), 6500); return; }
+        catch (Exception ex) { show("CFG", 6500); return; }
+        status.setTextSize(config.badgeTextSizeSp);
+        status.setAlpha(config.badgeOpacity);
+        badgeDurationMs = config.badgeDurationMs;
         boolean longPress = duration >= config.longPressMs;
         if (!longPress) staged = null;
         if (staged != null && System.currentTimeMillis() - stagedAt > 120000L) staged = null;
@@ -155,11 +161,11 @@ public final class CaptureModule {
         View decor = activity.getWindow().getDecorView();
         int w = decor.getWidth();
         int h = decor.getHeight();
-        if (w < 1 || h < 1) { button.setVisibility(View.VISIBLE); busy = false; show("Layar belum siap", 3000); return; }
+        if (w < 1 || h < 1) { button.setVisibility(View.VISIBLE); busy = false; show("IMG", 3000); return; }
         final SurfaceView surface = findSurface(decor);
         int sourceWidth = surface == null ? w : surface.getWidth();
         int sourceHeight = surface == null ? h : surface.getHeight();
-        if (sourceWidth < 1 || sourceHeight < 1) { button.setVisibility(View.VISIBLE); busy = false; show("Permukaan belum siap", 3000); return; }
+        if (sourceWidth < 1 || sourceHeight < 1) { button.setVisibility(View.VISIBLE); busy = false; show("IMG", 3000); return; }
         final Bitmap source = Bitmap.createBitmap(sourceWidth, sourceHeight, Bitmap.Config.ARGB_8888);
         try {
             PixelCopy.OnPixelCopyFinishedListener listener = result -> ui.post(() -> {
@@ -167,7 +173,7 @@ public final class CaptureModule {
                 if (result != PixelCopy.SUCCESS) {
                     source.recycle();
                     busy = false;
-                    show("Tangkapan gagal (PixelCopy " + result + ")", 5500);
+                    show("IMG", 5500);
                     return;
                 }
                 Bitmap composed;
@@ -175,14 +181,14 @@ public final class CaptureModule {
                 catch (RuntimeException ex) {
                     source.recycle();
                     busy = false;
-                    show("Gagal menyusun gambar: " + safeMessage(ex), 5500);
+                    show("IMG", 5500);
                     return;
                 }
                 source.recycle();
                 if (isMostlyBlack(composed)) {
                     composed.recycle();
                     busy = false;
-                    show("Tangkapan hitam; permukaan tidak terbaca", 5500);
+                    show("IMG", 5500);
                     return;
                 }
                 worker.execute(() -> processCapture(composed, config, longPress, stageTwo));
@@ -194,7 +200,7 @@ public final class CaptureModule {
             source.recycle();
             button.setVisibility(View.VISIBLE);
             busy = false;
-            show("Tangkapan gagal: " + safeMessage(ex), 5500);
+            show("IMG", 5500);
         }
     }
 
@@ -267,28 +273,28 @@ public final class CaptureModule {
                 staged = jpeg;
                 stagedAt = System.currentTimeMillis();
                 busy = false;
-                show("Tahap 1 tersimpan. Gulir, lalu tekan lama lagi.", 6000);
+                show("1/2", 6000);
                 return;
             }
             ArrayList<byte[]> images = new ArrayList<>();
             if (stageTwo) images.add(staged);
             images.add(jpeg);
             staged = null;
-            show("Menganalisis soal…", 15000);
+            show("…", 15000);
             Answer answer = askGemini(config, images);
             if (answer.kind.equals("FREE_RESPONSE")) {
                 activity.runOnUiThread(() -> {
                     ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
                     clipboard.setPrimaryClip(ClipData.newPlainText("Jawaban esai", answer.text));
                 });
-                show("Jawaban esai disalin. Tempel pada kolom jawaban.", 7000);
+                show("✓", 7000);
             } else if (answer.kind.equals("UNCLEAR")) {
-                show("Soal belum lengkap atau tidak terbaca", 6500);
+                show("?", 6500);
             } else {
-                show("Jawaban: " + answer.text, 9000);
+                show(answer.text, 9000);
             }
         } catch (Exception ex) {
-            show("Analisis gagal: " + safeMessage(ex), 7000);
+            show(errorBadge(ex), 7000);
         } finally {
             busy = false;
         }
@@ -299,8 +305,17 @@ public final class CaptureModule {
             status.setText(message);
             status.setVisibility(View.VISIBLE);
             ui.removeCallbacks(hideStatus);
-            ui.postDelayed(hideStatus, ms);
+            ui.postDelayed(hideStatus, Math.min(ms, badgeDurationMs));
         });
+    }
+
+    private String errorBadge(Exception ex) {
+        String message = safeMessage(ex);
+        if (message.contains("Isi API key")) return "KEY";
+        java.util.regex.Matcher http = java.util.regex.Pattern.compile("HTTP [0-9]{3}").matcher(message);
+        if (http.find()) return http.group();
+        if (message.contains("Semua key")) return "KEY!";
+        return "!";
     }
 
     private static String safeMessage(Exception ex) {
@@ -340,6 +355,7 @@ public final class CaptureModule {
         try (OutputStream out = resolver.openOutputStream(uri, "w")) {
             if (out == null) throw new Exception("Tidak dapat menulis config.json");
             out.write(("{\n  \"model\": \"gemini-2.5-flash\",\n  \"jpegQuality\": 80,\n  \"longPressMs\": 650,\n"
+                    + "  \"badge\": {\"opacity\": 0.55, \"textSizeSp\": 12, \"durationMs\": 3500},\n"
                     + "  \"apiKeys\": [\n    {\"label\": \"primary\", \"enabled\": true, \"key\": \"PASTE_KEY_HERE\"}\n  ]\n}\n")
                     .getBytes(StandardCharsets.UTF_8));
         } finally {
@@ -365,6 +381,14 @@ public final class CaptureModule {
         if (!cfg.model.matches("[A-Za-z0-9._-]{3,100}")) throw new Exception("Nama model tidak valid");
         cfg.jpegQuality = obj.optInt("jpegQuality", 80);
         cfg.longPressMs = obj.optInt("longPressMs", 650);
+        JSONObject badge = obj.optJSONObject("badge");
+        cfg.badgeOpacity = badge == null ? 0.55f : (float) badge.optDouble("opacity", 0.55);
+        cfg.badgeTextSizeSp = badge == null ? 12 : badge.optInt("textSizeSp", 12);
+        cfg.badgeDurationMs = badge == null ? 3500 : badge.optInt("durationMs", 3500);
+        if (cfg.badgeOpacity < 0.15f || cfg.badgeOpacity > 1.0f
+                || cfg.badgeTextSizeSp < 8 || cfg.badgeTextSizeSp > 24
+                || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000)
+            throw new Exception("Pengaturan badge tidak valid");
         if (cfg.jpegQuality < 40 || cfg.jpegQuality > 95 || cfg.longPressMs < 350 || cfg.longPressMs > 3000)
             throw new Exception("Kualitas atau durasi tekan tidak valid");
         JSONArray keys = obj.optJSONArray("apiKeys");
@@ -464,7 +488,7 @@ public final class CaptureModule {
         JSONArray values = obj.getJSONArray("answers");
         if (values.length() < 1 || values.length() > 5 || (kind.equals("MULTIPLE_CHOICE") && values.length() != 1))
             throw new JSONException("Jumlah pilihan tidak valid");
-        StringBuilder text = new StringBuilder("(");
+        StringBuilder text = new StringBuilder();
         boolean[] seen = new boolean[6];
         for (int i = 0; i < values.length(); i++) {
             int v = values.getInt(i);
@@ -473,14 +497,16 @@ public final class CaptureModule {
             if (i > 0) text.append(',');
             text.append(v);
         }
-        text.append(')');
-        return new Answer(kind, kind.equals("MULTIPLE_CHOICE") ? text.substring(1, text.length() - 1) : text.toString());
+        return new Answer(kind, text.toString());
     }
 
     private static final class Config {
         String model;
         int jpegQuality;
         int longPressMs;
+        float badgeOpacity;
+        int badgeTextSizeSp;
+        int badgeDurationMs;
         final ArrayList<String> keys = new ArrayList<>();
     }
     private static final class Answer {

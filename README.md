@@ -4,7 +4,7 @@ Modul Android kecil yang berjalan **di dalam proses dan jendela Activity E-Ujian
 
 ## Status
 
-Source berhasil dikompilasi menjadi DEX dan diintegrasikan ke kandidat APK lokal. Verifikasi statis lulus: package/version dan sertifikat sama dengan basis; manifest serta seluruh native library identik; satu-satunya perubahan kode basis adalah panggilan `CaptureModule.install()` di `MainActivity.onCreate()`. **Smoke test pada Vivo Android 15 non-root lulus untuk startup, pembuatan JSON, capture satu dan dua tahap, serta penyimpanan gambar. Uji portal gate, paste pada soal, Gemini, dan Android 13 masih tertunda. Jangan anggap kandidat ini rilis stabil.** APK basis dan keystore tidak disimpan di repositori ini.
+Source berhasil dikompilasi menjadi DEX dan diintegrasikan ke kandidat APK lokal. Verifikasi statis lulus: package/version dan sertifikat sama dengan basis; manifest serta seluruh native library identik; satu-satunya perubahan kode basis adalah panggilan `CaptureModule.install()` di `MainActivity.onCreate()`. **Kandidat sebelumnya telah diuji pada Vivo Android 15 non-root: startup, portal siswa, paste esai, capture satu dan dua tahap, penyimpanan gambar, serta Gemini dan clipboard esai berhasil. Perubahan badge kecil di bawah pada source terbaru masih memerlukan uji perangkat; Android 13 juga belum diuji.** APK basis dan keystore tidak disimpan di repositori ini.
 
 Basis yang dipakai: `E-Ujian_paste_focus_no_secure_candidate.apk`, SHA-256 `F23B7C5AE44BE920FA0BB28979DC0CC4B3AF9E5D1AB0FF4467381CE7B7D74D1C`.
 
@@ -12,7 +12,7 @@ Basis yang dipakai: `E-Ujian_paste_focus_no_secure_candidate.apk`, SHA-256 `F23B
 
 - Ketuk tombol `◎`: simpan satu tangkapan viewport E-Ujian ke `Pictures/E-Ujian/`, lalu analisis dengan Gemini.
 - Tekan lama pertama: simpan tahap 1. Gulir soal. Tekan lama kedua: simpan tahap 2 lalu kirim kedua gambar dalam satu permintaan. Tahap tertunda kedaluwarsa setelah dua menit.
-- Pilihan tunggal ditampilkan sebagai angka `1–5`; pilihan jamak sebagai `(1,2)`; esai otomatis disalin ke clipboard. Soal yang tidak lengkap menghasilkan `UNCLEAR`.
+- Badge kecil di bawah menampilkan angka `1–5` untuk pilihan tunggal, `1,2` untuk pilihan jamak, `✓` saat esai sudah disalin, dan `?` bila soal belum jelas. Status singkat: `…` sedang memproses, `1/2` tahap pertama tersimpan, `KEY` API key belum diisi, `CFG` konfigurasi bermasalah, `IMG` tangkapan gagal, `HTTP NNN` kegagalan jaringan, `!` kesalahan lain.
 - Tombol dan hasil adalah View dalam jendela Activity yang sama. Saat `PixelCopy` berjalan, View modul disembunyikan sementara. Modul menyalin `FlutterSurfaceView` lalu menggambar WebView yang tertanam di atasnya; menyalin Window langsung menghasilkan gambar hitam pada Vivo V2247. Capture hanya mencakup viewport yang sedang terlihat, bukan seluruh halaman gulir.
 - Seluruh tangkapan disimpan ke album, termasuk ketika analisis jaringan gagal.
 
@@ -34,6 +34,7 @@ Skrip memvalidasi format, menulis lewat `content://media/.../downloads/<id>`, la
   "model": "gemini-2.5-flash",
   "jpegQuality": 80,
   "longPressMs": 650,
+  "badge": {"opacity": 0.55, "textSizeSp": 12, "durationMs": 3500},
   "apiKeys": [
     { "label": "primary", "enabled": true, "key": "PASTE_KEY_HERE" }
   ]
@@ -41,6 +42,8 @@ Skrip memvalidasi format, menulis lewat `content://media/.../downloads/<id>`, la
 ```
 
 `apiKeys` menerima maksimal 10 slot. Slot aktif dipilih round robin; kegagalan yang dapat dialihkan mencoba slot berikutnya, dan HTTP 429 menunda slot tersebut selama 60 detik. HTTP 400/404 menghentikan rotasi. JSON ini berada di penyimpanan publik dan menyimpan key sebagai teks biasa; jangan taruh key nyata di Git, log, atau laporan. Modul tidak membutuhkan root.
+
+`badge` opsional. Nilai bawaan menempatkan badge di tengah bawah, sekitar 120 dp dari tepi bawah seperti pola popup ScreenPilot. `opacity` menerima 0.15–1.0, `textSizeSp` 8–24, dan `durationMs` 500–10000. Konfigurasi lama tanpa objek `badge` tetap berlaku dengan nilai bawaan ini.
 
 ## Build modul
 

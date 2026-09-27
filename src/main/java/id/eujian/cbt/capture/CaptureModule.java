@@ -156,12 +156,12 @@ public final class CaptureModule {
     }
 
     private void onTrigger(long duration) {
-        android.util.Log.i("EujianDiag", "trigger duration=" + duration);
         attachDismissListener((View) activity.getWindow().getDecorView());
         if (busy) { show("…", 2500); return; }
         final Config config;
         try { config = readConfig(); }
         catch (Exception ex) { show("CFG", 6500); return; }
+        diag(config, "trigger long=" + (duration >= config.longPressMs));
         applyAppearance(config);
         boolean longPress = duration >= config.longPressMs;
         if (!longPress) staged = null;
@@ -355,7 +355,12 @@ public final class CaptureModule {
         return "!";
     }
     private void diag(Config config, String message) {
-        if (config != null && config.diagnostic) android.util.Log.i("EujianDiag", message);
+        if (config == null || !config.diagnostic) return;
+        android.util.Log.i("EujianDiag", message);
+        try {
+            android.os.Bundle data = new android.os.Bundle(); data.putString("event", message);
+            activity.getContentResolver().call(Uri.parse("content://id.eujian.capture.settings.config"), "log", null, data);
+        } catch (Exception ignored) { }
     }
     private int parseColor(String name) {
         if ("white".equals(name)) return 0xCCF5F5F5;

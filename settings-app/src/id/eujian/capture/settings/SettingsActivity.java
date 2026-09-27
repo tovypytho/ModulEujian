@@ -1,6 +1,7 @@
 package id.eujian.capture.settings;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -34,6 +35,7 @@ public final class SettingsActivity extends Activity {
     private EditText modelField, keyField, labelField;
     private Switch enabledSwitch;
     private Switch diagnosticSwitch;
+    private static final int EXPORT_LOG = 17;
     private TextView slotStatus, connectionStatus, previewBadge, previewButton;
     private FrameLayout preview;
     private LinearLayout slotGrid;
@@ -97,6 +99,11 @@ public final class SettingsActivity extends Activity {
         keys.addView(text("Strategi: Round Robin", 15, LAVENDER, true));
         keys.addView(text("Setiap analisis memulai dari slot berikutnya. HTTP 429 memberi cooldown 60 detik.", 13, MUTED, false)); showSlot();
         diagnosticSwitch = new Switch(this); diagnosticSwitch.setText("Aktifkan diagnostic log (tanpa key/soal/jawaban)"); diagnosticSwitch.setTextColor(PALE); diagnosticSwitch.setChecked(config.optBoolean("diagnostic", false)); keys.addView(diagnosticSwitch);
+        keys.addView(button("Ekspor diagnostic log", false, () -> {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.setType("text/plain"); intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.putExtra(Intent.EXTRA_TITLE, "eujian_diagnostic.log"); startActivityForResult(intent, EXPORT_LOG);
+        }));
 
         LinearLayout floating = card(body, "⚙  Floating Button Config");
         floating.addView(text("Pratinjau langsung tombol dan jawaban", 14, MUTED, false));
@@ -268,6 +275,19 @@ public final class SettingsActivity extends Activity {
     }
     private int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + .5f); }
     private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != EXPORT_LOG || result != RESULT_OK || data == null || data.getData() == null) return;
+        try {
+            Bundle response = getContentResolver().call(ConfigProvider.URI, "exportLog", null, null);
+            String log = response == null ? "" : response.getString("log", "");
+            try (java.io.OutputStream out = getContentResolver().openOutputStream(data.getData(), "w")) {
+                if (out == null) throw new Exception("Output unavailable");
+                out.write(log.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            }
+            toast("Log tersimpan di lokasi yang dipilih");
+        } catch (Exception ex) { toast("Ekspor log gagal"); }
+    }
     private int colorFor(String name) {
         if ("white".equals(name)) return 0xCCF5F5F5;
         if ("purple".equals(name)) return 0xCC6C4AA6;

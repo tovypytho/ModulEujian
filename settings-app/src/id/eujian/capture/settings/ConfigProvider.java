@@ -47,6 +47,17 @@ public final class ConfigProvider extends ContentProvider {
         try (FileOutputStream out = new FileOutputStream(temp)) { out.write(json.getBytes(StandardCharsets.UTF_8)); out.getFD().sync(); }
         if (!temp.renameTo(file())) throw new Exception("Cannot commit config");
     }
+    private void appendLog(String event) throws Exception {
+        if (event == null || event.length() > 160 || !event.matches("[A-Za-z0-9_ =:!./-]+")) throw new Exception("Invalid diagnostic event");
+        File log = new File(getContext().getFilesDir(), "diagnostic.log");
+        if (log.length() > 262144) {
+            File old = new File(getContext().getFilesDir(), "diagnostic.previous.log");
+            if (old.exists()) old.delete();
+            log.renameTo(old);
+        }
+        String line = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US).format(new java.util.Date()) + " " + event + "\n";
+        try (FileOutputStream out = new FileOutputStream(log, true)) { out.write(line.getBytes(StandardCharsets.UTF_8)); }
+    }
     @Override public synchronized Bundle call(String method, String arg, Bundle extras) {
         authorize();
         Bundle result = new Bundle();
@@ -58,6 +69,20 @@ public final class ConfigProvider extends ContentProvider {
             } else if ("status".equals(method)) {
                 result.putLong("lastExamRead", getContext().getSharedPreferences("connection", 0).getLong("last_exam_read", 0));
                 result.putBoolean("hasConfig", read() != null);
+            } else if ("log".equals(method)) {
+                String current = read();
+                if (current != null && new JSONObject(current).optBoolean("diagnostic", false))
+                    appendLog(extras == null ? null : extras.getString("event"));
+                result.putBoolean("logged", true);
+            } else if ("exportLog".equals(method)) {
+                if (Binder.getCallingUid() != android.os.Process.myUid()) throw new SecurityException("Export is restricted to settings app");
+                File log = new File(getContext().getFilesDir(), "diagnostic.log");
+                if (!log.exists()) result.putString("log", "No diagnostic events recorded.\n");
+                else {
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    try (FileInputStream in = new FileInputStream(log)) { byte[] b = new byte[4096]; int n; while ((n = in.read(b)) >= 0) out.write(b, 0, n); }
+                    result.putString("log", out.toString("UTF-8"));
+                }
             }
             else if ("initialize".equals(method)) {
                 if (read() == null) write(extras == null ? null : extras.getString("json"));

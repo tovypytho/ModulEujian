@@ -124,7 +124,7 @@ public final class CaptureModule {
             return e.getActionMasked() == MotionEvent.ACTION_MOVE || e.getActionMasked() == MotionEvent.ACTION_CANCEL;
         });
         worker.execute(() -> {
-            try { ensureConfig(); }
+            try { ensureConfig(); Config config = readConfig(); ui.post(() -> applyAppearance(config)); }
             catch (Exception ex) { show("CFG", 7000); }
         });
     }
@@ -142,9 +142,7 @@ public final class CaptureModule {
         final Config config;
         try { config = readConfig(); }
         catch (Exception ex) { show("CFG", 6500); return; }
-        status.setTextSize(config.badgeTextSizeSp);
-        status.setAlpha(config.badgeOpacity);
-        badgeDurationMs = config.badgeDurationMs;
+        applyAppearance(config);
         boolean longPress = duration >= config.longPressMs;
         if (!longPress) staged = null;
         if (staged != null && System.currentTimeMillis() - stagedAt > 120000L) staged = null;
@@ -309,6 +307,22 @@ public final class CaptureModule {
         });
     }
 
+    private void applyAppearance(Config config) {
+        status.setTextSize(config.badgeTextSizeSp);
+        status.setAlpha(config.badgeOpacity);
+        badgeDurationMs = config.badgeDurationMs;
+        FrameLayout.LayoutParams sp = (FrameLayout.LayoutParams) status.getLayoutParams();
+        sp.bottomMargin = dp(config.badgeBottomOffsetDp);
+        status.setLayoutParams(sp);
+        button.setAlpha(config.buttonOpacity);
+        FrameLayout.LayoutParams bp = (FrameLayout.LayoutParams) button.getLayoutParams();
+        bp.width = bp.height = dp(config.buttonSizeDp);
+        bp.gravity = (config.buttonSide.equals("left") ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL;
+        bp.leftMargin = config.buttonSide.equals("left") ? dp(8) : 0;
+        bp.rightMargin = config.buttonSide.equals("right") ? dp(8) : 0;
+        button.setLayoutParams(bp);
+    }
+
     private String errorBadge(Exception ex) {
         String message = safeMessage(ex);
         if (message.contains("Isi API key")) return "KEY";
@@ -355,7 +369,8 @@ public final class CaptureModule {
         try (OutputStream out = resolver.openOutputStream(uri, "w")) {
             if (out == null) throw new Exception("Tidak dapat menulis config.json");
             out.write(("{\n  \"model\": \"gemini-2.5-flash\",\n  \"jpegQuality\": 80,\n  \"longPressMs\": 650,\n"
-                    + "  \"badge\": {\"opacity\": 0.55, \"textSizeSp\": 12, \"durationMs\": 3500},\n"
+                    + "  \"badge\": {\"opacity\": 0.55, \"textSizeSp\": 12, \"durationMs\": 3500, \"bottomOffsetDp\": 120},\n"
+                    + "  \"button\": {\"opacity\": 0.55, \"sizeDp\": 52, \"side\": \"right\"},\n"
                     + "  \"apiKeys\": [\n    {\"label\": \"primary\", \"enabled\": true, \"key\": \"PASTE_KEY_HERE\"}\n  ]\n}\n")
                     .getBytes(StandardCharsets.UTF_8));
         } finally {
@@ -385,9 +400,18 @@ public final class CaptureModule {
         cfg.badgeOpacity = badge == null ? 0.55f : (float) badge.optDouble("opacity", 0.55);
         cfg.badgeTextSizeSp = badge == null ? 12 : badge.optInt("textSizeSp", 12);
         cfg.badgeDurationMs = badge == null ? 3500 : badge.optInt("durationMs", 3500);
+        cfg.badgeBottomOffsetDp = badge == null ? 120 : badge.optInt("bottomOffsetDp", 120);
+        JSONObject buttonCfg = obj.optJSONObject("button");
+        cfg.buttonOpacity = buttonCfg == null ? 0.55f : (float) buttonCfg.optDouble("opacity", 0.55);
+        cfg.buttonSizeDp = buttonCfg == null ? 52 : buttonCfg.optInt("sizeDp", 52);
+        cfg.buttonSide = buttonCfg == null ? "right" : buttonCfg.optString("side", "right");
         if (cfg.badgeOpacity < 0.15f || cfg.badgeOpacity > 1.0f
                 || cfg.badgeTextSizeSp < 8 || cfg.badgeTextSizeSp > 24
-                || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000)
+                || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000
+                || cfg.badgeBottomOffsetDp < 24 || cfg.badgeBottomOffsetDp > 400
+                || cfg.buttonOpacity < 0.15f || cfg.buttonOpacity > 1.0f
+                || cfg.buttonSizeDp < 32 || cfg.buttonSizeDp > 88
+                || (!cfg.buttonSide.equals("left") && !cfg.buttonSide.equals("right")))
             throw new Exception("Pengaturan badge tidak valid");
         if (cfg.jpegQuality < 40 || cfg.jpegQuality > 95 || cfg.longPressMs < 350 || cfg.longPressMs > 3000)
             throw new Exception("Kualitas atau durasi tekan tidak valid");
@@ -507,6 +531,10 @@ public final class CaptureModule {
         float badgeOpacity;
         int badgeTextSizeSp;
         int badgeDurationMs;
+        int badgeBottomOffsetDp;
+        float buttonOpacity;
+        int buttonSizeDp;
+        String buttonSide;
         final ArrayList<String> keys = new ArrayList<>();
     }
     private static final class Answer {

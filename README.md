@@ -4,7 +4,7 @@ Modul Android kecil yang berjalan **di dalam proses dan jendela Activity E-Ujian
 
 ## Status
 
-Source berhasil dikompilasi menjadi DEX dan diintegrasikan ke kandidat APK lokal. Verifikasi statis lulus: package/version dan sertifikat sama dengan basis; manifest serta seluruh native library identik; satu-satunya perubahan kode basis adalah panggilan `CaptureModule.install()` di `MainActivity.onCreate()`. **Kandidat sebelumnya telah diuji pada Vivo Android 15 non-root: startup, portal siswa, paste esai, capture satu dan dua tahap, penyimpanan gambar, serta Gemini dan clipboard esai berhasil. Perubahan badge kecil di bawah pada source terbaru masih memerlukan uji perangkat; Android 13 juga belum diuji.** APK basis dan keystore tidak disimpan di repositori ini.
+Source berhasil dikompilasi menjadi DEX dan diintegrasikan ke kandidat APK lokal. Verifikasi statis lulus: package/version dan sertifikat sama dengan basis; manifest serta seluruh native library identik; satu-satunya perubahan kode basis adalah panggilan `CaptureModule.install()` di `MainActivity.onCreate()`. **Kandidat sebelumnya telah diuji pada Vivo Android 15 non-root: startup, portal siswa, paste esai, capture satu dan dua tahap, penyimpanan gambar, serta Gemini dan clipboard esai berhasil. Kandidat dengan badge bawah dan aplikasi pengaturan sudah terpasang serta terbuka tanpa crash; alur memilih/menyimpan config lewat pemilih berkas dan portal siswa pada build terbaru belum diuji. Android 13 juga belum diuji.** APK basis dan keystore tidak disimpan di repositori ini.
 
 Basis yang dipakai: `E-Ujian_paste_focus_no_secure_candidate.apk`, SHA-256 `F23B7C5AE44BE920FA0BB28979DC0CC4B3AF9E5D1AB0FF4467381CE7B7D74D1C`.
 
@@ -34,7 +34,8 @@ Skrip memvalidasi format, menulis lewat `content://media/.../downloads/<id>`, la
   "model": "gemini-2.5-flash",
   "jpegQuality": 80,
   "longPressMs": 650,
-  "badge": {"opacity": 0.55, "textSizeSp": 12, "durationMs": 3500},
+  "badge": {"opacity": 0.55, "textSizeSp": 12, "durationMs": 3500, "bottomOffsetDp": 120},
+  "button": {"opacity": 0.55, "sizeDp": 52, "side": "right"},
   "apiKeys": [
     { "label": "primary", "enabled": true, "key": "PASTE_KEY_HERE" }
   ]
@@ -43,7 +44,13 @@ Skrip memvalidasi format, menulis lewat `content://media/.../downloads/<id>`, la
 
 `apiKeys` menerima maksimal 10 slot. Slot aktif dipilih round robin; kegagalan yang dapat dialihkan mencoba slot berikutnya, dan HTTP 429 menunda slot tersebut selama 60 detik. HTTP 400/404 menghentikan rotasi. JSON ini berada di penyimpanan publik dan menyimpan key sebagai teks biasa; jangan taruh key nyata di Git, log, atau laporan. Modul tidak membutuhkan root.
 
-`badge` opsional. Nilai bawaan menempatkan badge di tengah bawah, sekitar 120 dp dari tepi bawah seperti pola popup ScreenPilot. `opacity` menerima 0.15–1.0, `textSizeSp` 8–24, dan `durationMs` 500–10000. Konfigurasi lama tanpa objek `badge` tetap berlaku dengan nilai bawaan ini.
+`badge` opsional. Nilai bawaan menempatkan badge di tengah bawah, sekitar 120 dp dari tepi bawah seperti pola popup ScreenPilot. `opacity` menerima 0.15–1.0, `textSizeSp` 8–24, `durationMs` 500–10000, dan `bottomOffsetDp` 24–400. `button` opsional: `opacity` 0.15–1.0, `sizeDp` 32–88, dan `side` `left` atau `right`. Konfigurasi lama tanpa kedua objek tetap memakai nilai bawaan.
+
+## Aplikasi pengaturan terpisah
+
+`settings-app/` adalah aplikasi Android terpisah untuk mengatur tampilan modul. Ia menyediakan pratinjau layar, contoh badge `1`/`1,2`/`✓`, slider transparansi dan ukuran, posisi badge dari bawah, durasi, serta sisi tombol. Aplikasi tidak memiliki izin jaringan dan tidak menampilkan API key. Saat pertama kali dipakai, pilih **berkas config.json yang sama** melalui pemilih berkas Android. Pada perangkat yang diuji, berkas milik E-Ujian terlihat sebagai `Download/E-Ujian/config (1).json`. Pilihan berkas disimpan sebagai izin URI persisten. Tombol Simpan menulis kembali JSON yang sama, mempertahankan model dan key. Buka ulang E-Ujian untuk menerapkan perubahan tampilan awal; pemicu berikutnya juga membaca config terbaru.
+
+Bangun dan sign aplikasi pengaturan secara lokal dengan `./settings-app/build.ps1`. GitHub Actions membangun APK pengaturan **unsigned** agar keystore lokal tidak diunggah. APK pengaturan menggunakan package `id.eujian.capture.settings` dan tidak memerlukan root atau izin overlay sistem.
 
 ## Build modul
 

@@ -1,4 +1,5 @@
 /build/
+/settings-app/build/
 *.apk
 *.aab
 *.jks

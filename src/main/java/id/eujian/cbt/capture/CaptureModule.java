@@ -315,6 +315,7 @@ public final class CaptureModule {
         sp.bottomMargin = dp(config.badgeBottomOffsetDp);
         status.setLayoutParams(sp);
         button.setAlpha(config.buttonOpacity);
+        button.setBackground(round(config.buttonColor, 28));
         FrameLayout.LayoutParams bp = (FrameLayout.LayoutParams) button.getLayoutParams();
         bp.width = bp.height = dp(config.buttonSizeDp);
         bp.gravity = (config.buttonSide.equals("left") ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL;
@@ -330,6 +331,13 @@ public final class CaptureModule {
         if (http.find()) return http.group();
         if (message.contains("Semua key")) return "KEY!";
         return "!";
+    }
+    private int parseColor(String name) {
+        if ("white".equals(name)) return 0xCCF5F5F5;
+        if ("purple".equals(name)) return 0xCC6C4AA6;
+        if ("teal".equals(name)) return 0xCC008F87;
+        if ("gray".equals(name)) return 0xCC77727D;
+        return 0xCC263238;
     }
 
     private static String safeMessage(Exception ex) {
@@ -383,14 +391,8 @@ public final class CaptureModule {
     }
 
     private Config readConfig() throws Exception {
-        Uri uri = ensureConfig();
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
-            if (in == null) throw new Exception("Berkas tidak bisa dibaca");
-            byte[] b = new byte[4096]; int n;
-            while ((n = in.read(b)) >= 0) { out.write(b, 0, n); if (out.size() > 32768) throw new Exception("JSON terlalu besar"); }
-        }
-        JSONObject obj = new JSONObject(out.toString("UTF-8"));
+        String json = readSharedConfig();
+        JSONObject obj = new JSONObject(json);
         Config cfg = new Config();
         cfg.model = obj.optString("model", "gemini-2.5-flash");
         if (!cfg.model.matches("[A-Za-z0-9._-]{3,100}")) throw new Exception("Nama model tidak valid");
@@ -405,6 +407,7 @@ public final class CaptureModule {
         cfg.buttonOpacity = buttonCfg == null ? 0.55f : (float) buttonCfg.optDouble("opacity", 0.55);
         cfg.buttonSizeDp = buttonCfg == null ? 52 : buttonCfg.optInt("sizeDp", 52);
         cfg.buttonSide = buttonCfg == null ? "right" : buttonCfg.optString("side", "right");
+        cfg.buttonColor = parseColor(buttonCfg == null ? "dark" : buttonCfg.optString("color", "dark"));
         if (cfg.badgeOpacity < 0.15f || cfg.badgeOpacity > 1.0f
                 || cfg.badgeTextSizeSp < 8 || cfg.badgeTextSizeSp > 24
                 || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000
@@ -424,6 +427,33 @@ public final class CaptureModule {
                 cfg.keys.add(secret);
         }
         return cfg;
+    }
+
+    private String readSharedConfig() throws Exception {
+        Uri provider = Uri.parse("content://id.eujian.capture.settings.config");
+        try {
+            android.os.Bundle result = activity.getContentResolver().call(provider, "read", null, null);
+            if (result != null && result.getString("json") != null) return result.getString("json");
+        } catch (IllegalArgumentException missingApp) { /* Legacy config remains available. */ }
+        String legacy = readLegacyConfig();
+        try {
+            android.os.Bundle extras = new android.os.Bundle();
+            extras.putString("json", legacy);
+            android.os.Bundle initialized = activity.getContentResolver().call(provider, "initialize", null, extras);
+            if (initialized != null && initialized.getString("json") != null) return initialized.getString("json");
+        } catch (IllegalArgumentException missingApp) { /* Use legacy file if settings app is absent. */ }
+        return legacy;
+    }
+
+    private String readLegacyConfig() throws Exception {
+        Uri uri = ensureConfig();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("Berkas tidak bisa dibaca");
+            byte[] b = new byte[4096]; int n;
+            while ((n = in.read(b)) >= 0) { out.write(b, 0, n); if (out.size() > 32768) throw new Exception("JSON terlalu besar"); }
+        }
+        return out.toString("UTF-8");
     }
 
     private void saveImage(byte[] jpeg, String suffix) throws Exception {
@@ -535,6 +565,7 @@ public final class CaptureModule {
         float buttonOpacity;
         int buttonSizeDp;
         String buttonSide;
+        int buttonColor;
         final ArrayList<String> keys = new ArrayList<>();
     }
     private static final class Answer {

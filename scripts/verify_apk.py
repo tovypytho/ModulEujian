@@ -23,6 +23,7 @@ for label, names in (("ADDED", added), ("REMOVED", removed), ("CHANGED", changed
 expected_added = {"classes3.dex"}
 expected_changed = {
     "classes.dex",
+    "AndroidManifest.xml",
     "META-INF/ANDROIDD.RSA",
     "META-INF/ANDROIDD.SF",
     "META-INF/MANIFEST.MF",

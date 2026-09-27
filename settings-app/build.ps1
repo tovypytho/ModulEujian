@@ -5,7 +5,8 @@ $tools = Join-Path $AndroidSdk 'build-tools\35.0.1'
 $jar = Join-Path $AndroidSdk 'platforms\android-35\android.jar'
 $out = Join-Path $root 'build'
 New-Item -ItemType Directory -Force -Path (Join-Path $out 'classes'), (Join-Path $out 'dex') | Out-Null
-& javac -source 8 -target 8 -Xlint:-options -cp $jar -d (Join-Path $out 'classes') (Join-Path $root 'src\id\eujian\capture\settings\SettingsActivity.java')
+$sources = @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Recurse -File -Filter '*.java' | ForEach-Object FullName)
+& javac -source 8 -target 8 -Xlint:-options -cp $jar -d (Join-Path $out 'classes') $sources
 if ($LASTEXITCODE -ne 0) { throw 'javac failed' }
 $classes = @(Get-ChildItem -LiteralPath (Join-Path $out 'classes') -Recurse -File -Filter '*.class' | ForEach-Object FullName)
 & (Join-Path $tools 'd8.bat') --min-api 29 --lib $jar --output (Join-Path $out 'dex') $classes

@@ -36,6 +36,14 @@ if (([regex]::Matches($source, [regex]::Escape($anchor))).Count -ne 1) { throw '
 $newline = if ($source.Contains("`r`n")) { "`r`n" } else { "`n" }
 $patched = $source.Replace($anchor, $anchor + $newline + $newline + $hook)
 [IO.File]::WriteAllText($activity, $patched, [Text.UTF8Encoding]::new($false))
+$manifest = Join-Path $decoded 'AndroidManifest.xml'
+$manifestSource = [IO.File]::ReadAllText($manifest)
+$queryAnchor = '    <queries>'
+$providerQuery = '        <provider android:authorities="id.eujian.capture.settings.config"/>'
+if (([regex]::Matches($manifestSource, [regex]::Escape($queryAnchor))).Count -ne 1) { throw 'Unexpected manifest queries count' }
+if ($manifestSource.Contains($providerQuery)) { throw 'Settings provider query already present' }
+$manifestPatched = $manifestSource.Replace($queryAnchor, $queryAnchor + $newline + $providerQuery)
+[IO.File]::WriteAllText($manifest, $manifestPatched, [Text.UTF8Encoding]::new($false))
 
 $unsigned = Join-Path $out 'unsigned.apk'
 & $Apktool b $decoded -o $unsigned

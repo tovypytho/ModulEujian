@@ -55,7 +55,8 @@ jobs:
           bt="$sdk/build-tools/35.0.1"
           jar="$sdk/platforms/android-35/android.jar"
           mkdir -p settings-app/build/classes settings-app/build/dex
-          javac -source 8 -target 8 -Xlint:-options -cp "$jar" -d settings-app/build/classes settings-app/src/id/eujian/capture/settings/SettingsActivity.java
+          mapfile -t sources < <(find settings-app/src -name '*.java' -print)
+          javac -source 8 -target 8 -Xlint:-options -cp "$jar" -d settings-app/build/classes "${sources[@]}"
           mapfile -t classes < <(find settings-app/build/classes -name '*.class' -print)
           "$bt/d8" --min-api 29 --lib "$jar" --output settings-app/build/dex "${classes[@]}"
           "$bt/aapt2" link --manifest settings-app/AndroidManifest.xml -I "$jar" --min-sdk-version 29 --target-sdk-version 35 -o settings-app/build/unsigned.apk

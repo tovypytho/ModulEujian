@@ -16,6 +16,8 @@ import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.text.DateFormat;
@@ -24,10 +26,11 @@ import java.util.Date;
 public final class SettingsActivity extends Activity {
     private static final int DARK = 0xFF1C1A20, LAVENDER = 0xFFD9BDFC, PALE = 0xFFF4EFF8, MUTED = 0xFFAAA4B1;
     private JSONObject config;
-    private int selectedSlot, badgeOpacity = 55, badgeSize = 12, badgeBottom = 120, badgeDuration = 3500;
+    private int selectedSlot, badgeOpacity = 55, badgeSize = 12, badgeBottom = 120;
     private int buttonOpacity = 55, buttonSize = 52, sample;
     private String buttonSide = "right";
     private String buttonColor = "dark";
+    private String badgeBackground = "dark";
     private EditText modelField, keyField, labelField;
     private Switch enabledSwitch;
     private TextView slotStatus, connectionStatus, previewBadge, previewButton;
@@ -56,7 +59,7 @@ public final class SettingsActivity extends Activity {
         if (b != null) {
             badgeOpacity = (int)Math.round(b.optDouble("opacity", .55) * 100);
             badgeSize = b.optInt("textSizeSp", 12); badgeBottom = b.optInt("bottomOffsetDp", 120);
-            badgeDuration = b.optInt("durationMs", 3500);
+            badgeBackground = b.optString("background", "dark");
         }
         JSONObject btn = config.optJSONObject("button");
         if (btn != null) {
@@ -89,6 +92,7 @@ public final class SettingsActivity extends Activity {
         enabledSwitch = new Switch(this); enabledSwitch.setText("Slot aktif"); enabledSwitch.setTextColor(PALE); keys.addView(enabledSwitch);
         keys.addView(button("Simpan slot terpilih", true, this::saveSlot));
         keys.addView(button("Hapus key pada slot ini", false, this::clearSlot));
+        keys.addView(button("Cek semua slot aktif", false, this::checkAllKeys));
         keys.addView(text("Strategi: Round Robin", 15, LAVENDER, true));
         keys.addView(text("Setiap analisis memulai dari slot berikutnya. HTTP 429 memberi cooldown 60 detik.", 13, MUTED, false)); showSlot();
 
@@ -116,10 +120,12 @@ public final class SettingsActivity extends Activity {
         slider(badge, "Transparansi jawaban", 15, 100, badgeOpacity, v -> badgeOpacity = v);
         slider(badge, "Ukuran teks (sp)", 8, 24, badgeSize, v -> badgeSize = v);
         slider(badge, "Posisi dari bawah (dp)", 24, 240, badgeBottom, v -> badgeBottom = v);
-        slider(badge, "Durasi tampil (ms)", 500, 10000, badgeDuration, v -> badgeDuration = v);
+        badge.addView(text("Latar badge", 14, PALE, true));
+        LinearLayout badgeColors = new LinearLayout(this); badge.addView(badgeColors);
+        for (String name : new String[]{"none", "dark", "light"}) { Button swatch = new Button(this); swatch.setText(name); swatch.setAllCaps(false); swatch.setTextColor(name.equals("light") ? 0xFF222222 : PALE); swatch.setBackground(round(name.equals("none") ? 0x00352B40 : name.equals("light") ? 0xCCF5F5F5 : 0xCC182027, 18, 0)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.setMargins(dp(2), dp(2), dp(2), dp(2)); badgeColors.addView(swatch, p); swatch.setOnClickListener(v -> { badgeBackground = name; renderPreview(); }); }
         badge.addView(button("Reset tampilan bawaan", false, () -> {
-            badgeOpacity = 55; badgeSize = 12; badgeBottom = 120; badgeDuration = 3500;
-            buttonOpacity = 55; buttonSize = 52; buttonSide = "right"; buttonColor = "dark"; buildScreen();
+            badgeOpacity = 55; badgeSize = 12; badgeBottom = 120;
+            buttonOpacity = 55; buttonSize = 52; buttonSide = "right"; buttonColor = "dark"; badgeBackground = "dark"; buildScreen();
         }));
         body.addView(button("Simpan semua pengaturan", true, this::saveAll));
     }
@@ -170,13 +176,34 @@ public final class SettingsActivity extends Activity {
             value.remove("key"); value.put("enabled", false); refreshSlotGrid(); showSlot(); saveAll();
         } catch (Exception ex) { toast("Gagal menghapus slot"); }
     }
+    private void checkAllKeys() {
+        final JSONArray snapshot = config.optJSONArray("apiKeys");
+        if (snapshot == null || snapshot.length() == 0) { toast("Belum ada slot key"); return; }
+        slotStatus.setText("Memeriksa slot aktif…");
+        new Thread(() -> {
+            int good = 0, active = 0;
+            for (int i = 0; i < snapshot.length(); i++) {
+                JSONObject item = snapshot.optJSONObject(i); if (item == null || !item.optBoolean("enabled", false)) continue;
+                String key = item.optString("key", "").trim(); if (key.isEmpty() || key.equals("PASTE_KEY_HERE")) continue;
+                active++;
+                try {
+                    HttpURLConnection c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models?key=" + java.net.URLEncoder.encode(key, "UTF-8")).openConnection();
+                    c.setConnectTimeout(8000); c.setReadTimeout(8000); c.setRequestMethod("GET");
+                    if (c.getResponseCode() == 200) good++;
+                    c.disconnect();
+                } catch (Exception ignored) {}
+            }
+            final int ok = good, total = active;
+            runOnUiThread(() -> { slotStatus.setText("Cek selesai: " + ok + "/" + total + " slot aktif merespons"); toast(ok == total ? "Semua key aktif" : "Sebagian key gagal atau ditolak"); });
+        }).start();
+    }
     private void saveAll() {
         try {
             storeCurrentSlot();
             String model = modelField.getText().toString().trim(); if (!model.matches("[A-Za-z0-9._-]{3,100}")) { toast("Nama model tidak valid"); return; }
             config.put("model", model).put("strategy", "round_robin");
             JSONObject badge = config.optJSONObject("badge"); if (badge == null) badge = new JSONObject();
-            badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("durationMs", badgeDuration); config.put("badge", badge);
+            badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("background", badgeBackground); config.put("badge", badge);
             JSONObject button = config.optJSONObject("button"); if (button == null) button = new JSONObject();
             button.put("opacity", buttonOpacity / 100.0).put("sizeDp", buttonSize).put("side", buttonSide).put("color", buttonColor); config.put("button", button);
             Bundle extras = new Bundle(); extras.putString("json", config.toString());
@@ -196,7 +223,7 @@ public final class SettingsActivity extends Activity {
     private void renderPreview() {
         if (preview == null) return;
         previewBadge.setText(sample == 0 ? "1,2" : sample == 1 ? "1" : "✓");
-        previewBadge.setTextSize(badgeSize); previewBadge.setAlpha(badgeOpacity / 100f);
+        previewBadge.setTextSize(badgeSize); previewBadge.setAlpha(badgeOpacity / 100f); previewBadge.setBackground(round("none".equals(badgeBackground) ? 0x00352B40 : "light".equals(badgeBackground) ? 0xCCF5F5F5 : 0xCC182027, 8, 0));
         FrameLayout.LayoutParams b = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         b.bottomMargin = dp(Math.min(240, badgeBottom) * 300 / 700); previewBadge.setLayoutParams(b);
         previewButton.setAlpha(buttonOpacity / 100f); previewButton.setBackground(round(colorFor(buttonColor), 28, 0));

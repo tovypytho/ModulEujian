@@ -63,7 +63,6 @@ public final class CaptureModule {
     private volatile long stagedAt;
     private long touchDown;
     private int keyCursor;
-    private volatile int badgeDurationMs = 3500;
     private final Map<String, Long> cooldowns = new HashMap<>();
 
     public static void install(final Activity activity) {
@@ -111,6 +110,11 @@ public final class CaptureModule {
         FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         sp.bottomMargin = dp(120);
         decor.addView(status, sp);
+        decor.setOnTouchListener((v, e) -> {
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN && status.getVisibility() == View.VISIBLE)
+                status.setVisibility(View.GONE);
+            return false;
+        });
         button.setOnTouchListener((v, e) -> {
             if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 touchDown = android.os.SystemClock.uptimeMillis();
@@ -303,14 +307,13 @@ public final class CaptureModule {
             status.setText(message);
             status.setVisibility(View.VISIBLE);
             ui.removeCallbacks(hideStatus);
-            ui.postDelayed(hideStatus, Math.min(ms, badgeDurationMs));
         });
     }
 
     private void applyAppearance(Config config) {
         status.setTextSize(config.badgeTextSizeSp);
         status.setAlpha(config.badgeOpacity);
-        badgeDurationMs = config.badgeDurationMs;
+        status.setBackground(badgeBackground(config.badgeBackground));
         FrameLayout.LayoutParams sp = (FrameLayout.LayoutParams) status.getLayoutParams();
         sp.bottomMargin = dp(config.badgeBottomOffsetDp);
         status.setLayoutParams(sp);
@@ -338,6 +341,10 @@ public final class CaptureModule {
         if ("teal".equals(name)) return 0xCC008F87;
         if ("gray".equals(name)) return 0xCC77727D;
         return 0xCC263238;
+    }
+    private GradientDrawable badgeBackground(String name) {
+        if ("none".equals(name)) { GradientDrawable d = new GradientDrawable(); d.setColor(Color.TRANSPARENT); return d; }
+        return round("light".equals(name) ? 0xCCF5F5F5 : 0xCC182027, 8);
     }
 
     private static String safeMessage(Exception ex) {
@@ -403,6 +410,7 @@ public final class CaptureModule {
         cfg.badgeTextSizeSp = badge == null ? 12 : badge.optInt("textSizeSp", 12);
         cfg.badgeDurationMs = badge == null ? 3500 : badge.optInt("durationMs", 3500);
         cfg.badgeBottomOffsetDp = badge == null ? 120 : badge.optInt("bottomOffsetDp", 120);
+        cfg.badgeBackground = badge == null ? "dark" : badge.optString("background", "dark");
         JSONObject buttonCfg = obj.optJSONObject("button");
         cfg.buttonOpacity = buttonCfg == null ? 0.55f : (float) buttonCfg.optDouble("opacity", 0.55);
         cfg.buttonSizeDp = buttonCfg == null ? 52 : buttonCfg.optInt("sizeDp", 52);
@@ -412,6 +420,7 @@ public final class CaptureModule {
                 || cfg.badgeTextSizeSp < 8 || cfg.badgeTextSizeSp > 24
                 || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000
                 || cfg.badgeBottomOffsetDp < 24 || cfg.badgeBottomOffsetDp > 400
+                || (!cfg.badgeBackground.equals("none") && !cfg.badgeBackground.equals("dark") && !cfg.badgeBackground.equals("light"))
                 || cfg.buttonOpacity < 0.15f || cfg.buttonOpacity > 1.0f
                 || cfg.buttonSizeDp < 32 || cfg.buttonSizeDp > 88
                 || (!cfg.buttonSide.equals("left") && !cfg.buttonSide.equals("right")))
@@ -566,6 +575,7 @@ public final class CaptureModule {
         int buttonSizeDp;
         String buttonSide;
         int buttonColor;
+        String badgeBackground;
         final ArrayList<String> keys = new ArrayList<>();
     }
     private static final class Answer {

@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -22,6 +23,9 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.PixelCopy;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.SurfaceView;
+import android.webkit.WebView;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
@@ -148,27 +152,107 @@ public final class CaptureModule {
     }
 
     private void capture(Config config, boolean longPress, boolean stageTwo) {
-        int w = activity.getWindow().getDecorView().getWidth();
-        int h = activity.getWindow().getDecorView().getHeight();
+        View decor = activity.getWindow().getDecorView();
+        int w = decor.getWidth();
+        int h = decor.getHeight();
         if (w < 1 || h < 1) { button.setVisibility(View.VISIBLE); busy = false; show("Layar belum siap", 3000); return; }
-        final Bitmap bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        final SurfaceView surface = findSurface(decor);
+        int sourceWidth = surface == null ? w : surface.getWidth();
+        int sourceHeight = surface == null ? h : surface.getHeight();
+        if (sourceWidth < 1 || sourceHeight < 1) { button.setVisibility(View.VISIBLE); busy = false; show("Permukaan belum siap", 3000); return; }
+        final Bitmap source = Bitmap.createBitmap(sourceWidth, sourceHeight, Bitmap.Config.ARGB_8888);
         try {
-            PixelCopy.request(activity.getWindow(), bitmap, result -> ui.post(() -> {
+            PixelCopy.OnPixelCopyFinishedListener listener = result -> ui.post(() -> {
                 button.setVisibility(View.VISIBLE);
                 if (result != PixelCopy.SUCCESS) {
-                    bitmap.recycle();
+                    source.recycle();
                     busy = false;
                     show("Tangkapan gagal (PixelCopy " + result + ")", 5500);
                     return;
                 }
-                worker.execute(() -> processCapture(bitmap, config, longPress, stageTwo));
-            }), new Handler(pixelThread.getLooper()));
+                Bitmap composed;
+                try { composed = composeSurfaceAndWebViews(decor, surface, source, w, h); }
+                catch (RuntimeException ex) {
+                    source.recycle();
+                    busy = false;
+                    show("Gagal menyusun gambar: " + safeMessage(ex), 5500);
+                    return;
+                }
+                source.recycle();
+                if (isMostlyBlack(composed)) {
+                    composed.recycle();
+                    busy = false;
+                    show("Tangkapan hitam; permukaan tidak terbaca", 5500);
+                    return;
+                }
+                worker.execute(() -> processCapture(composed, config, longPress, stageTwo));
+            });
+            Handler handler = new Handler(pixelThread.getLooper());
+            if (surface != null) PixelCopy.request(surface, source, listener, handler);
+            else PixelCopy.request(activity.getWindow(), source, listener, handler);
         } catch (Exception ex) {
-            bitmap.recycle();
+            source.recycle();
             button.setVisibility(View.VISIBLE);
             busy = false;
             show("Tangkapan gagal: " + safeMessage(ex), 5500);
         }
+    }
+
+    private SurfaceView findSurface(View view) {
+        if (view instanceof SurfaceView && view.getWidth() > 0 && view.getHeight() > 0) return (SurfaceView) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                SurfaceView found = findSurface(group.getChildAt(i));
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
+
+    private Bitmap composeSurfaceAndWebViews(View decor, SurfaceView surface, Bitmap source, int width, int height) {
+        Bitmap result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(result);
+        canvas.drawColor(Color.WHITE);
+        int[] origin = new int[2];
+        decor.getLocationInWindow(origin);
+        if (surface != null) {
+            int[] location = new int[2];
+            surface.getLocationInWindow(location);
+            canvas.drawBitmap(source, location[0] - origin[0], location[1] - origin[1], null);
+        } else {
+            canvas.drawBitmap(source, 0, 0, null);
+        }
+        drawWebViews(decor, canvas, origin);
+        return result;
+    }
+
+    private void drawWebViews(View view, Canvas canvas, int[] origin) {
+        if (view instanceof WebView && view.getVisibility() == View.VISIBLE) {
+            int[] location = new int[2];
+            view.getLocationInWindow(location);
+            canvas.save();
+            canvas.translate(location[0] - origin[0], location[1] - origin[1]);
+            canvas.clipRect(0, 0, view.getWidth(), view.getHeight());
+            view.draw(canvas);
+            canvas.restore();
+        } else if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) drawWebViews(group.getChildAt(i), canvas, origin);
+        }
+    }
+
+    private boolean isMostlyBlack(Bitmap bitmap) {
+        int dark = 0;
+        int total = 0;
+        for (int y = 0; y < bitmap.getHeight(); y += Math.max(1, bitmap.getHeight() / 20)) {
+            for (int x = 0; x < bitmap.getWidth(); x += Math.max(1, bitmap.getWidth() / 20)) {
+                int pixel = bitmap.getPixel(x, y);
+                if (Color.red(pixel) < 12 && Color.green(pixel) < 12 && Color.blue(pixel) < 12) dark++;
+                total++;
+            }
+        }
+        return dark > total * 95 / 100;
     }
 
     private void processCapture(Bitmap bitmap, Config config, boolean longPress, boolean stageTwo) {

@@ -95,7 +95,8 @@ public final class SettingsActivity extends Activity {
         enabledSwitch = new Switch(this); enabledSwitch.setText("Slot aktif"); enabledSwitch.setTextColor(PALE); keys.addView(enabledSwitch);
         keys.addView(button("Simpan slot terpilih", true, this::saveSlot));
         keys.addView(button("Hapus key pada slot ini", false, this::clearSlot));
-        keys.addView(button("Cek semua slot aktif", false, this::checkAllKeys));
+        keys.addView(button("Cek semua slot aktif (uji nyata)", false, this::checkAllKeys));
+        keys.addView(text("Uji nyata mengirim satu prompt pendek tanpa gambar dan memakai sedikit quota Gemini.", 12, MUTED, false));
         keys.addView(text("Strategi: Round Robin", 15, LAVENDER, true));
         keys.addView(text("Setiap analisis memulai dari slot berikutnya. HTTP 429 memberi cooldown 60 detik.", 13, MUTED, false)); showSlot();
         diagnosticSwitch = new Switch(this); diagnosticSwitch.setText("Aktifkan diagnostic log (tanpa key/soal/jawaban)"); diagnosticSwitch.setTextColor(PALE); diagnosticSwitch.setChecked(config.optBoolean("diagnostic", false)); keys.addView(diagnosticSwitch);
@@ -196,9 +197,14 @@ public final class SettingsActivity extends Activity {
                 String key = item.optString("key", "").trim(); if (key.isEmpty() || key.equals("PASTE_KEY_HERE")) continue;
                 active++;
                 try {
-                    HttpURLConnection c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models?key=" + java.net.URLEncoder.encode(key, "UTF-8")).openConnection();
-                    c.setConnectTimeout(8000); c.setReadTimeout(8000); c.setRequestMethod("GET");
-                    if (c.getResponseCode() == 200) good++;
+                    String model = modelField.getText().toString().trim();
+                    HttpURLConnection c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent").openConnection();
+                    c.setConnectTimeout(8000); c.setReadTimeout(10000); c.setRequestMethod("POST"); c.setDoOutput(true);
+                    c.setRequestProperty("Content-Type", "application/json"); c.setRequestProperty("x-goog-api-key", key);
+                    byte[] body = ("{\"contents\":[{\"parts\":[{\"text\":\"Reply only OK\"}]}],\"generationConfig\":{\"maxOutputTokens\":2}}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    try (java.io.OutputStream out = c.getOutputStream()) { out.write(body); }
+                    int code = c.getResponseCode();
+                    if (code == 200) good++;
                     c.disconnect();
                 } catch (Exception ignored) {}
             }

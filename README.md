@@ -20,6 +20,15 @@ Basis yang dipakai: `E-Ujian_paste_focus_no_secure_candidate.apk`, SHA-256 `F23B
 
 Pada penggunaan pertama, aplikasi membuat `Download/E-Ujian/config.json` melalui MediaStore. Edit **berkas yang sama** dengan pengelola berkas sebelum membuka soal. Jika pengelola berkas mengganti berkas alih-alih mengedit isinya, akses URI dapat berubah; bila muncul kesalahan konfigurasi, periksa lokasi/berkasnya.
 
+Pada Vivo Android 15, `adb push` langsung ke path Downloads membuat berkas baru yang tidak terkait dengan URI MediaStore milik aplikasi. Akibatnya aplikasi masih membaca template tanpa key, bahkan ketika file pada path tersebut tampak sudah berubah. Untuk mengirim JSON dari laptop, gunakan entri MediaStore milik aplikasi:
+
+```powershell
+python ./scripts/push_config.py '<config-lokal>.json' --dry-run
+python ./scripts/push_config.py '<config-lokal>.json'
+```
+
+Skrip memvalidasi format, menulis lewat `content://media/.../downloads/<id>`, lalu membandingkan hasil baca balik tanpa menampilkan key. Bila ada lebih dari satu entri `config*.json`, tentukan `--media-id` dari hasil query metadata MediaStore. Jangan gunakan `adb push` ke path Downloads untuk pembaruan selanjutnya.
+
 ```json
 {
   "model": "gemini-2.5-flash",

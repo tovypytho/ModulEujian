@@ -115,6 +115,7 @@ public final class CaptureModule {
                 status.setVisibility(View.GONE);
             return false;
         });
+        attachDismissListener(decor);
         button.setOnTouchListener((v, e) -> {
             if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 touchDown = android.os.SystemClock.uptimeMillis();
@@ -134,6 +135,19 @@ public final class CaptureModule {
     }
 
     private int dp(int value) { return (int) (value * activity.getResources().getDisplayMetrics().density + 0.5f); }
+    private void attachDismissListener(View view) {
+        if (view != button && view != status) {
+            view.setOnTouchListener((v, e) -> {
+                if (e.getActionMasked() == MotionEvent.ACTION_DOWN && status.getVisibility() == View.VISIBLE)
+                    status.setVisibility(View.GONE);
+                return false;
+            });
+        }
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) attachDismissListener(group.getChildAt(i));
+        }
+    }
     private GradientDrawable round(int color, int radiusDp) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(color);
@@ -142,6 +156,7 @@ public final class CaptureModule {
     }
 
     private void onTrigger(long duration) {
+        attachDismissListener((View) activity.getWindow().getDecorView());
         if (busy) { show("…", 2500); return; }
         final Config config;
         try { config = readConfig(); }

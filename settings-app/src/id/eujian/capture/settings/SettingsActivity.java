@@ -36,7 +36,8 @@ public final class SettingsActivity extends Activity {
     private Switch enabledSwitch;
     private Switch diagnosticSwitch;
     private static final int EXPORT_LOG = 17;
-    private TextView slotStatus, connectionStatus, previewBadge, previewButton;
+    private TextView slotStatus, checkResults, connectionStatus, previewBadge, previewButton;
+    private int keyTimeoutSeconds = 15;
     private FrameLayout preview;
     private LinearLayout slotGrid;
 
@@ -70,6 +71,7 @@ public final class SettingsActivity extends Activity {
             buttonSize = btn.optInt("sizeDp", 52); buttonSide = btn.optString("side", "right");
             buttonColor = btn.optString("color", "dark");
         }
+        keyTimeoutSeconds = Math.max(5, Math.min(45, config.optInt("keyTimeoutSeconds", 15)));
     }
     private void buildScreen() {
         LinearLayout page = new LinearLayout(this); page.setOrientation(LinearLayout.VERTICAL); page.setBackgroundColor(DARK);
@@ -96,9 +98,11 @@ public final class SettingsActivity extends Activity {
         keys.addView(button("Simpan slot terpilih", true, this::saveSlot));
         keys.addView(button("Hapus key pada slot ini", false, this::clearSlot));
         keys.addView(button("Cek semua slot aktif (uji nyata)", false, this::checkAllKeys));
+        checkResults = text("Hasil per slot akan tampil di sini.", 13, PALE, false); keys.addView(checkResults);
         keys.addView(text("Uji nyata mengirim satu prompt pendek tanpa gambar dan memakai sedikit quota Gemini.", 12, MUTED, false));
         keys.addView(text("Strategi: Round Robin", 15, LAVENDER, true));
-        keys.addView(text("Setiap analisis memulai dari slot berikutnya. HTTP 429 memberi cooldown 60 detik.", 13, MUTED, false)); showSlot();
+        keys.addView(text("Setiap analisis memulai dari slot berikutnya. Kegagalan langsung mencoba slot lain tanpa cooldown.", 13, MUTED, false));
+        slider(keys, "Batas tunggu per slot (detik)", 5, 45, keyTimeoutSeconds, v -> keyTimeoutSeconds = v); showSlot();
         diagnosticSwitch = new Switch(this); diagnosticSwitch.setText("Aktifkan diagnostic log (tanpa key/soal/jawaban)"); diagnosticSwitch.setTextColor(PALE); diagnosticSwitch.setChecked(config.optBoolean("diagnostic", false)); keys.addView(diagnosticSwitch);
         keys.addView(button("Ekspor diagnostic log", false, () -> {
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
@@ -189,27 +193,48 @@ public final class SettingsActivity extends Activity {
     private void checkAllKeys() {
         final JSONArray snapshot = config.optJSONArray("apiKeys");
         if (snapshot == null || snapshot.length() == 0) { toast("Belum ada slot key"); return; }
-        slotStatus.setText("Memeriksa slot aktif…");
+        final String model = modelField.getText().toString().trim();
+        if (!model.matches("[A-Za-z0-9._-]{3,100}")) { toast("Nama model tidak valid"); return; }
+        checkResults.setText("Memeriksa setiap slot aktif…");
         new Thread(() -> {
             int good = 0, active = 0;
+            StringBuilder report = new StringBuilder();
             for (int i = 0; i < snapshot.length(); i++) {
                 JSONObject item = snapshot.optJSONObject(i); if (item == null || !item.optBoolean("enabled", false)) continue;
-                String key = item.optString("key", "").trim(); if (key.isEmpty() || key.equals("PASTE_KEY_HERE")) continue;
+                String key = item.optString("key", "").trim();
+                if (key.isEmpty() || key.equals("PASTE_KEY_HERE")) { report.append("Slot #").append(i + 1).append(": key kosong\n"); continue; }
                 active++;
+                HttpURLConnection c = null;
+                long started = System.currentTimeMillis();
                 try {
-                    String model = modelField.getText().toString().trim();
-                    HttpURLConnection c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent").openConnection();
+                    c = (HttpURLConnection) new URL("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent").openConnection();
                     c.setConnectTimeout(8000); c.setReadTimeout(10000); c.setRequestMethod("POST"); c.setDoOutput(true);
                     c.setRequestProperty("Content-Type", "application/json"); c.setRequestProperty("x-goog-api-key", key);
-                    byte[] body = ("{\"contents\":[{\"parts\":[{\"text\":\"Reply only OK\"}]}],\"generationConfig\":{\"maxOutputTokens\":2}}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    byte[] body = ("{\"contents\":[{\"parts\":[{\"text\":\"Reply only OK\"}]}],\"generationConfig\":{\"maxOutputTokens\":32}}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
                     try (java.io.OutputStream out = c.getOutputStream()) { out.write(body); }
                     int code = c.getResponseCode();
-                    if (code == 200) good++;
-                    c.disconnect();
-                } catch (Exception ignored) {}
+                    if (code == 200) {
+                        java.io.ByteArrayOutputStream response = new java.io.ByteArrayOutputStream();
+                        try (java.io.InputStream in = c.getInputStream()) {
+                            byte[] buffer = new byte[4096]; int count;
+                            while ((count = in.read(buffer)) >= 0) {
+                                response.write(buffer, 0, count);
+                                if (response.size() > 65536) throw new Exception("Respons terlalu besar");
+                            }
+                        }
+                        JSONObject result = new JSONObject(response.toString("UTF-8"));
+                        String generated = result.getJSONArray("candidates").getJSONObject(0)
+                                .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
+                        if (generated.trim().isEmpty()) throw new Exception("Respons kosong");
+                        good++;
+                    }
+                    report.append("Slot #").append(i + 1).append(": HTTP ").append(code).append(code == 200 ? " · respons valid" : " · gagal");
+                } catch (Exception ex) { report.append("Slot #").append(i + 1).append(": ").append(ex.getClass().getSimpleName()); }
+                finally { if (c != null) c.disconnect(); }
+                report.append(" (").append(System.currentTimeMillis() - started).append(" ms)\n");
             }
             final int ok = good, total = active;
-            runOnUiThread(() -> { slotStatus.setText("Cek selesai: " + ok + "/" + total + " slot aktif merespons"); toast(ok == total ? "Semua key aktif" : "Sebagian key gagal atau ditolak"); });
+            runOnUiThread(() -> { checkResults.setText("Cek selesai: " + ok + "/" + total + " slot aktif berhasil\n" + report); toast(ok == total ? "Semua key aktif" : "Lihat nomor slot yang gagal"); });
         }).start();
     }
     private void saveAll() {
@@ -217,6 +242,7 @@ public final class SettingsActivity extends Activity {
             storeCurrentSlot();
             String model = modelField.getText().toString().trim(); if (!model.matches("[A-Za-z0-9._-]{3,100}")) { toast("Nama model tidak valid"); return; }
             config.put("model", model).put("strategy", "round_robin");
+            config.put("keyTimeoutSeconds", keyTimeoutSeconds);
             config.put("diagnostic", diagnosticSwitch != null && diagnosticSwitch.isChecked());
             JSONObject badge = config.optJSONObject("badge"); if (badge == null) badge = new JSONObject();
             badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("background", badgeBackground); config.put("badge", badge);

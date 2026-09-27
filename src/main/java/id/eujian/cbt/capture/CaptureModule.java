@@ -42,11 +42,13 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.Locale;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** A deliberately small in-process Android module. No service, overlay window or second Activity. */
 public final class CaptureModule {
@@ -55,6 +57,7 @@ public final class CaptureModule {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final HandlerThread pixelThread = new HandlerThread("eujian-pixel-copy");
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService requests = Executors.newCachedThreadPool();
     private final TextView button;
     private final TextView status;
     private final Runnable hideStatus;
@@ -63,7 +66,6 @@ public final class CaptureModule {
     private volatile long stagedAt;
     private long touchDown;
     private int keyCursor;
-    private final Map<String, Long> cooldowns = new HashMap<>();
 
     public static void install(final Activity activity) {
         if (Build.VERSION.SDK_INT < 29) return;
@@ -79,11 +81,13 @@ public final class CaptureModule {
 
     private void dispose() {
         worker.shutdownNow();
+        requests.shutdownNow();
         pixelThread.quitSafely();
     }
 
     private CaptureModule(Activity activity) {
         this.activity = activity;
+        keyCursor = activity.getPreferences(Context.MODE_PRIVATE).getInt("gemini_key_cursor", 0);
         pixelThread.start();
         FrameLayout decor = (FrameLayout) activity.getWindow().getDecorView();
         button = new TextView(activity);
@@ -432,6 +436,7 @@ public final class CaptureModule {
         if (!cfg.model.matches("[A-Za-z0-9._-]{3,100}")) throw new Exception("Nama model tidak valid");
         cfg.jpegQuality = obj.optInt("jpegQuality", 80);
         cfg.longPressMs = obj.optInt("longPressMs", 650);
+        cfg.keyTimeoutSeconds = obj.optInt("keyTimeoutSeconds", 15);
         JSONObject badge = obj.optJSONObject("badge");
         cfg.badgeOpacity = badge == null ? 0.55f : (float) badge.optDouble("opacity", 0.55);
         cfg.badgeTextSizeSp = badge == null ? 12 : badge.optInt("textSizeSp", 12);
@@ -452,7 +457,8 @@ public final class CaptureModule {
                 || cfg.buttonSizeDp < 32 || cfg.buttonSizeDp > 88
                 || (!cfg.buttonSide.equals("left") && !cfg.buttonSide.equals("right")))
             throw new Exception("Pengaturan badge tidak valid");
-        if (cfg.jpegQuality < 40 || cfg.jpegQuality > 95 || cfg.longPressMs < 350 || cfg.longPressMs > 3000)
+        if (cfg.jpegQuality < 40 || cfg.jpegQuality > 95 || cfg.longPressMs < 350 || cfg.longPressMs > 3000
+                || cfg.keyTimeoutSeconds < 5 || cfg.keyTimeoutSeconds > 45)
             throw new Exception("Kualitas atau durasi tekan tidak valid");
         JSONArray keys = obj.optJSONArray("apiKeys");
         if (keys == null || keys.length() > 10) throw new Exception("apiKeys harus berisi maksimal 10 slot");
@@ -460,7 +466,7 @@ public final class CaptureModule {
             JSONObject k = keys.getJSONObject(i);
             String secret = k.optString("key", "").trim();
             if (k.optBoolean("enabled", false) && !secret.isEmpty() && !secret.equals("PASTE_KEY_HERE"))
-                cfg.keys.add(secret);
+            { cfg.keys.add(secret); cfg.keySlots.add(i + 1); }
         }
         cfg.diagnostic = obj.optBoolean("diagnostic", false);
         return cfg;
@@ -531,40 +537,59 @@ public final class CaptureModule {
         String payload = request.toString();
         if (payload.length() > 19000000) throw new Exception("Gambar terlalu besar untuk dikirim");
         String endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" + cfg.model + ":generateContent";
-        int start = keyCursor++ % cfg.keys.size();
+        int start = Math.floorMod(keyCursor, cfg.keys.size());
+        keyCursor = keyCursor == Integer.MAX_VALUE ? 0 : keyCursor + 1;
+        activity.getPreferences(Context.MODE_PRIVATE).edit().putInt("gemini_key_cursor", keyCursor).apply();
         Exception last = null;
         for (int i = 0; i < cfg.keys.size(); i++) {
-            String key = cfg.keys.get((start + i) % cfg.keys.size());
-            Long until = cooldowns.get(key);
-            if (until != null && until > System.currentTimeMillis()) continue;
-            HttpURLConnection conn = null;
+            int index = (start + i) % cfg.keys.size();
+            String key = cfg.keys.get(index);
+            int slot = cfg.keySlots.get(index);
+            AtomicReference<HttpURLConnection> activeConnection = new AtomicReference<>();
+            long started = System.currentTimeMillis();
+            Future<Answer> pending = requests.submit(() -> requestGemini(endpoint, key, payload, activeConnection));
             try {
-                conn = (HttpURLConnection) new URL(endpoint).openConnection();
-                conn.setRequestMethod("POST");
-                conn.setConnectTimeout(12000);
-                conn.setReadTimeout(35000);
-                conn.setDoOutput(true);
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("x-goog-api-key", key);
-                try (OutputStream out = conn.getOutputStream()) { out.write(payload.getBytes(StandardCharsets.UTF_8)); }
-                int code = conn.getResponseCode();
-                if (code == 400 || code == 404) throw new StopRotation("Model atau permintaan ditolak (HTTP " + code + ")");
-                if (code == 429) cooldowns.put(key, System.currentTimeMillis() + 60000L);
-                if (code != 200) { last = new Exception("HTTP " + code); continue; }
-                ByteArrayOutputStream response = new ByteArrayOutputStream();
-                try (InputStream in = conn.getInputStream()) {
-                    byte[] b = new byte[8192]; int n;
-                    while ((n = in.read(b)) >= 0) { response.write(b, 0, n); if (response.size() > 1048576) throw new Exception("Respons terlalu besar"); }
-                }
-                JSONObject envelope = new JSONObject(response.toString("UTF-8"));
-                String text = envelope.getJSONArray("candidates").getJSONObject(0)
-                        .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
-                return parseAnswer(new JSONObject(text));
-            } catch (StopRotation ex) { throw ex; }
-            catch (Exception ex) { last = ex; }
-            finally { if (conn != null) conn.disconnect(); }
+                Answer answer = pending.get(cfg.keyTimeoutSeconds, TimeUnit.SECONDS);
+                diag(cfg, "gemini slot=" + slot + " success ms=" + (System.currentTimeMillis() - started));
+                return answer;
+            } catch (TimeoutException ex) { last = ex; diag(cfg, "gemini slot=" + slot + " timeout"); }
+            catch (Exception ex) {
+                Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                last = ex;
+                diag(cfg, "gemini slot=" + slot + " failure=" + cause.getMessage());
+            } finally {
+                pending.cancel(true);
+                HttpURLConnection conn = activeConnection.get();
+                if (conn != null) conn.disconnect();
+            }
         }
-        throw new Exception(last == null ? "Semua key sedang cooldown" : "Semua key gagal atau tidak tersedia");
+        throw new Exception("Semua " + cfg.keys.size() + " slot gagal atau tidak tersedia", last);
+    }
+
+    private Answer requestGemini(String endpoint, String key, String payload,
+                                 AtomicReference<HttpURLConnection> activeConnection) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(endpoint).openConnection();
+        activeConnection.set(conn);
+        try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(10000);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("x-goog-api-key", key);
+            try (OutputStream out = conn.getOutputStream()) { out.write(payload.getBytes(StandardCharsets.UTF_8)); }
+            int code = conn.getResponseCode();
+            if (code != 200) throw new Exception("HTTP " + code);
+            ByteArrayOutputStream response = new ByteArrayOutputStream();
+            try (InputStream in = conn.getInputStream()) {
+                byte[] b = new byte[8192]; int n;
+                while ((n = in.read(b)) >= 0) { response.write(b, 0, n); if (response.size() > 1048576) throw new Exception("Respons terlalu besar"); }
+            }
+            JSONObject envelope = new JSONObject(response.toString("UTF-8"));
+            String text = envelope.getJSONArray("candidates").getJSONObject(0)
+                    .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
+            return parseAnswer(new JSONObject(text));
+        } finally { conn.disconnect(); }
     }
 
     private Answer parseAnswer(JSONObject obj) throws JSONException {
@@ -595,6 +620,7 @@ public final class CaptureModule {
         String model;
         int jpegQuality;
         int longPressMs;
+        int keyTimeoutSeconds;
         float badgeOpacity;
         int badgeTextSizeSp;
         int badgeDurationMs;
@@ -606,6 +632,7 @@ public final class CaptureModule {
         String badgeBackground;
         boolean diagnostic;
         final ArrayList<String> keys = new ArrayList<>();
+        final ArrayList<Integer> keySlots = new ArrayList<>();
     }
     private static final class Answer {
         final String kind, text;

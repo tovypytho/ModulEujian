@@ -48,7 +48,7 @@ public final class ConfigProvider extends ContentProvider {
         if (!temp.renameTo(file())) throw new Exception("Cannot commit config");
     }
     private void appendLog(String event) throws Exception {
-        if (event == null || event.length() > 160 || !event.matches("[A-Za-z0-9_ =:!./-]+")) throw new Exception("Invalid diagnostic event");
+        if (event == null || event.length() > 240 || !event.matches("[A-Za-z0-9_ =:!./,%+\\-]+")) throw new Exception("Invalid diagnostic event");
         File log = new File(getContext().getFilesDir(), "diagnostic.log");
         if (log.length() > 262144) {
             File old = new File(getContext().getFilesDir(), "diagnostic.previous.log");
@@ -81,7 +81,11 @@ public final class ConfigProvider extends ContentProvider {
                 else {
                     ByteArrayOutputStream out = new ByteArrayOutputStream();
                     try (FileInputStream in = new FileInputStream(log)) { byte[] b = new byte[4096]; int n; while ((n = in.read(b)) >= 0) out.write(b, 0, n); }
-                    result.putString("log", out.toString("UTF-8"));
+                    String body = out.toString("UTF-8");
+                    int events = body.isEmpty() ? 0 : body.split("\\n").length;
+                    String header = "# schema=2 exportedAt=" + new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", java.util.Locale.US).format(new java.util.Date())
+                            + " bytes=" + out.size() + " events=" + events + " rotated=" + new File(getContext().getFilesDir(), "diagnostic.previous.log").exists() + "\n";
+                    result.putString("log", header + body);
                 }
             }
             else if ("initialize".equals(method)) {

@@ -36,6 +36,7 @@ public final class SettingsActivity extends Activity {
     private EditText modelField, keyField, labelField;
     private Switch enabledSwitch;
     private Switch diagnosticSwitch;
+    private Switch captureProbeSwitch;
     private static final int EXPORT_LOG = 17;
     private TextView slotStatus, checkResults, connectionStatus, previewBadge, previewButton;
     private int keyTimeoutSeconds = 15;
@@ -107,6 +108,8 @@ public final class SettingsActivity extends Activity {
         keys.addView(text("Setiap analisis memulai dari slot berikutnya. Kegagalan langsung mencoba slot lain tanpa cooldown.", 13, MUTED, false));
         slider(keys, "Batas tunggu per slot (detik)", 5, 45, keyTimeoutSeconds, v -> keyTimeoutSeconds = v); showSlot();
         diagnosticSwitch = new Switch(this); diagnosticSwitch.setText("Aktifkan diagnostic log (tanpa key/soal/jawaban)"); diagnosticSwitch.setTextColor(PALE); diagnosticSwitch.setChecked(config.optBoolean("diagnostic", false)); keys.addView(diagnosticSwitch);
+        captureProbeSwitch = new Switch(this); captureProbeSwitch.setText("Capture diagnostic probe (simpan varian gambar)"); captureProbeSwitch.setTextColor(PALE); captureProbeSwitch.setChecked(config.optBoolean("captureProbe", false)); keys.addView(captureProbeSwitch);
+        keys.addView(text("Probe menyimpan varian direct WebView dan surface composition ke album tanpa mengirimnya ke Gemini.", 12, MUTED, false));
         keys.addView(button("Ekspor diagnostic log", false, () -> {
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.setType("text/plain"); intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -253,6 +256,7 @@ public final class SettingsActivity extends Activity {
             config.put("model", model).put("strategy", "round_robin");
             config.put("keyTimeoutSeconds", keyTimeoutSeconds);
             config.put("diagnostic", diagnosticSwitch != null && diagnosticSwitch.isChecked());
+            config.put("captureProbe", captureProbeSwitch != null && captureProbeSwitch.isChecked());
             JSONObject badge = config.optJSONObject("badge"); if (badge == null) badge = new JSONObject();
             badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("background", badgeBackground).put("side", badgeSide); config.put("badge", badge);
             config.put("answerFormat", answerFormat);

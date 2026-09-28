@@ -166,11 +166,12 @@ public final class CaptureModule {
         final Config config;
         try { config = readConfig(); }
         catch (Exception ex) { show("CFG", 6500); return; }
-        diag(config, "trigger long=" + (duration >= config.longPressMs));
+        diag(config, "trigger durationMs=" + duration + " long=" + (duration >= config.longPressMs) + " thresholdMs=" + config.longPressMs
+                + " staged=" + (staged != null) + " busy=" + busy);
         applyAppearance(config);
         boolean longPress = duration >= config.longPressMs;
         if (!longPress) staged = null;
-        if (staged != null && System.currentTimeMillis() - stagedAt > 120000L) staged = null;
+        if (staged != null && System.currentTimeMillis() - stagedAt > 120000L) { diag(config, "stage_expired ageMs=" + (System.currentTimeMillis() - stagedAt)); staged = null; }
         final boolean stageTwo = longPress && staged != null;
         busy = true;
         button.setVisibility(View.INVISIBLE);
@@ -195,6 +196,7 @@ public final class CaptureModule {
         View decor = activity.getWindow().getDecorView();
         int w = decor.getWidth();
         int h = decor.getHeight();
+        diag(config, "view decor=" + w + "x" + h + " api=" + Build.VERSION.SDK_INT + " density=" + activity.getResources().getDisplayMetrics().density);
         if (w < 1 || h < 1) { button.setVisibility(View.VISIBLE); busy = false; show("IMG", 3000); return; }
         final SurfaceView surface = findSurface(decor);
         int sourceWidth = surface == null ? w : surface.getWidth();
@@ -212,7 +214,8 @@ public final class CaptureModule {
                     return;
                 }
                 Bitmap composed;
-                try { composed = composeSurfaceAndWebViews(decor, surface, source, w, h); }
+                Bitmap probeComposite = null;
+                try { composed = web == null ? composeSurfaceAndWebViews(decor, surface, source, w, h) : renderWebView(web); }
                 catch (RuntimeException ex) {
                     restorePendingWebView();
                     source.recycle();
@@ -220,22 +223,30 @@ public final class CaptureModule {
                     show("IMG", 5500);
                     return;
                 }
-                source.recycle();
-                pendingWebRestore.run();
-                pendingWebRestore = () -> {};
-                if (web != null) {
-                    composed = cropToWebView(composed, web, decor);
-                    diag(config, "capture mode=clean_viewport size=" + composed.getWidth() + "x" + composed.getHeight());
+                if (config.captureProbe) {
+                    try { probeComposite = composeSurfaceAndWebViews(decor, surface, source, w, h); }
+                    catch (RuntimeException ignored) { diag(config, "probe renderer=surface_composite status=error"); }
+                    if (surface != null) diag(config, "probe renderer=window_pixelcopy status=unavailable reason=surface_present");
                 }
+                if (web != null) diag(config, "capture mode=webview_direct size=" + composed.getWidth() + "x" + composed.getHeight());
                 if (isMostlyBlack(composed)) {
                     restorePendingWebView();
+                    source.recycle();
                     composed.recycle();
                     busy = false;
                     show("IMG", 5500);
                     return;
                 }
                 final Bitmap captured = composed;
-                worker.execute(() -> processCapture(captured, config, longPress, stageTwo));
+                final Bitmap probe = probeComposite;
+                source.recycle();
+                pendingWebRestore.run();
+                pendingWebRestore = () -> {};
+                worker.execute(() -> {
+                    if (probe != null) saveDiagnosticBitmap(probe, config, "surface_composite");
+                    if (config.captureProbe) diag(config, "probe renderer=direct_webview " + bitmapStats(captured));
+                    processCapture(captured, config, longPress, stageTwo);
+                });
             });
             Handler handler = new Handler(pixelThread.getLooper());
             if (surface != null) PixelCopy.request(surface, source, listener, handler);
@@ -268,6 +279,10 @@ public final class CaptureModule {
     }
 
     private void prepareWebView(WebView web, Config config, Runnable next) {
+        int[] webLocation = new int[2]; web.getLocationInWindow(webLocation);
+        int[] decorLocation = new int[2]; activity.getWindow().getDecorView().getLocationInWindow(decorLocation);
+        diag(config, "webview rect=" + webLocation[0] + "," + webLocation[1] + "," + web.getWidth() + "x" + web.getHeight()
+                + " decor=" + decorLocation[0] + "," + decorLocation[1]);
         String script = "(function(){var a=[],n=0;var es=document.querySelectorAll('*');" +
                 "for(var i=0;i<es.length;i++){var e=es[i],s=getComputedStyle(e),r=e.getBoundingClientRect()," +
                 "z=parseInt(s.zIndex)||0,p=s.position,w=innerWidth,h=innerHeight;" +
@@ -298,6 +313,40 @@ public final class CaptureModule {
         Bitmap cropped = Bitmap.createBitmap(source, left, top, width, height);
         source.recycle();
         return cropped;
+    }
+
+    private Bitmap renderWebView(WebView web) {
+        int width = web.getWidth(), height = web.getHeight();
+        if (width < 1 || height < 1) throw new IllegalStateException("WebView dimensions invalid");
+        Bitmap result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(result);
+        canvas.drawColor(Color.WHITE);
+        web.draw(canvas);
+        return result;
+    }
+
+    private String bitmapStats(Bitmap bitmap) {
+        long white = 0, black = 0, samples = 0;
+        for (int y = 0; y < bitmap.getHeight(); y += Math.max(1, bitmap.getHeight() / 24)) {
+            for (int x = 0; x < bitmap.getWidth(); x += Math.max(1, bitmap.getWidth() / 24)) {
+                int p = bitmap.getPixel(x, y); int r = Color.red(p), g = Color.green(p), b = Color.blue(p);
+                if (r > 245 && g > 245 && b > 245) white++;
+                if (r < 12 && g < 12 && b < 12) black++;
+                samples++;
+            }
+        }
+        return "size=" + bitmap.getWidth() + "x" + bitmap.getHeight() + "whitePct=" + (white * 100 / Math.max(1, samples)) + "blackPct=" + (black * 100 / Math.max(1, samples));
+    }
+
+    private void saveDiagnosticBitmap(Bitmap bitmap, Config config, String renderer) {
+        try {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            bitmap.compress(Bitmap.CompressFormat.JPEG, config.jpegQuality, out);
+            byte[] bytes = out.toByteArray();
+            saveImage(bytes, "probe_" + renderer);
+            diag(config, "probe renderer=" + renderer + " savedBytes=" + bytes.length + " " + bitmapStats(bitmap));
+        } catch (Exception ex) { diag(config, "probe renderer=" + renderer + " saveError"); }
+        finally { bitmap.recycle(); }
     }
 
     private SurfaceView findSurface(View view) {
@@ -365,10 +414,12 @@ public final class CaptureModule {
             bitmap.recycle();
             byte[] jpeg = out.toByteArray();
             if (jpeg.length < 3000) throw new Exception("Gambar kosong");
+            diag(config, "jpeg stage=" + (stageTwo ? "stage2" : longPress ? "stage1" : "single") + " bytes=" + jpeg.length + " quality=" + config.jpegQuality);
             saveImage(jpeg, stageTwo ? "stage2" : longPress ? "stage1" : "single");
             if (longPress && !stageTwo) {
                 staged = jpeg;
                 stagedAt = System.currentTimeMillis();
+                diag(config, "stage_saved stage=stage1 ageMs=0");
                 busy = false;
                 show("1/2", 6000);
                 return;
@@ -377,6 +428,8 @@ public final class CaptureModule {
             if (stageTwo) images.add(staged);
             images.add(jpeg);
             staged = null;
+            int totalBytes = 0; for (byte[] image : images) totalBytes += image.length;
+            diag(config, "gemini_request images=" + images.size() + " totalBytes=" + totalBytes + " stageTwo=" + stageTwo);
             show("…", 15000);
             Answer answer = askGemini(config, images);
             diag(config, "gemini success kind=" + answer.kind + " images=" + images.size());
@@ -386,10 +439,13 @@ public final class CaptureModule {
                     clipboard.setPrimaryClip(ClipData.newPlainText("Jawaban esai", answer.text));
                 });
                 show("✓", 7000);
+                diag(config, "badge_show category=essay_copied clipboard=success");
             } else if (answer.kind.equals("UNCLEAR")) {
                 show("?", 6500);
+                diag(config, "badge_show category=unclear");
             } else {
                 show(formatAnswer(answer.text, config), 9000);
+                diag(config, "badge_show category=" + ("dots".equals(config.answerFormat) ? "dots" : "numeric"));
             }
         } catch (Exception ex) {
             diag(config, "gemini error=" + errorBadge(ex));
@@ -539,6 +595,7 @@ public final class CaptureModule {
         cfg.badgeBackground = badge == null ? "dark" : badge.optString("background", "dark");
         cfg.badgeSide = badge == null ? "center" : badge.optString("side", "center");
         cfg.answerFormat = obj.optString("answerFormat", "numeric");
+        cfg.captureProbe = obj.optBoolean("captureProbe", false);
         JSONObject buttonCfg = obj.optJSONObject("button");
         cfg.buttonOpacity = buttonCfg == null ? 0.55f : (float) buttonCfg.optDouble("opacity", 0.55);
         cfg.buttonSizeDp = buttonCfg == null ? 52 : buttonCfg.optInt("sizeDp", 52);
@@ -731,6 +788,7 @@ public final class CaptureModule {
         String badgeSide;
         String answerFormat;
         boolean diagnostic;
+        boolean captureProbe;
         final ArrayList<String> keys = new ArrayList<>();
         final ArrayList<Integer> keySlots = new ArrayList<>();
     }

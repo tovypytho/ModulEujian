@@ -66,6 +66,7 @@ public final class CaptureModule {
     private volatile long stagedAt;
     private long touchDown;
     private int keyCursor;
+    private Runnable pendingWebRestore = () -> {};
 
     public static void install(final Activity activity) {
         if (Build.VERSION.SDK_INT < 29) return;
@@ -181,6 +182,17 @@ public final class CaptureModule {
 
     private void capture(Config config, boolean longPress, boolean stageTwo) {
         View decor = activity.getWindow().getDecorView();
+        WebView web = findLargestWebView(decor);
+        if (web != null) {
+            prepareWebView(web, config, () -> capturePrepared(config, longPress, stageTwo, web));
+            return;
+        }
+        diag(config, "capture fallback=no_webview");
+        capturePrepared(config, longPress, stageTwo, null);
+    }
+
+    private void capturePrepared(Config config, boolean longPress, boolean stageTwo, WebView web) {
+        View decor = activity.getWindow().getDecorView();
         int w = decor.getWidth();
         int h = decor.getHeight();
         if (w < 1 || h < 1) { button.setVisibility(View.VISIBLE); busy = false; show("IMG", 3000); return; }
@@ -193,6 +205,7 @@ public final class CaptureModule {
             PixelCopy.OnPixelCopyFinishedListener listener = result -> ui.post(() -> {
                 button.setVisibility(View.VISIBLE);
                 if (result != PixelCopy.SUCCESS) {
+                    restorePendingWebView();
                     source.recycle();
                     busy = false;
                     show("IMG", 5500);
@@ -201,29 +214,90 @@ public final class CaptureModule {
                 Bitmap composed;
                 try { composed = composeSurfaceAndWebViews(decor, surface, source, w, h); }
                 catch (RuntimeException ex) {
+                    restorePendingWebView();
                     source.recycle();
                     busy = false;
                     show("IMG", 5500);
                     return;
                 }
                 source.recycle();
+                pendingWebRestore.run();
+                pendingWebRestore = () -> {};
+                if (web != null) {
+                    composed = cropToWebView(composed, web, decor);
+                    diag(config, "capture mode=clean_viewport size=" + composed.getWidth() + "x" + composed.getHeight());
+                }
                 if (isMostlyBlack(composed)) {
+                    restorePendingWebView();
                     composed.recycle();
                     busy = false;
                     show("IMG", 5500);
                     return;
                 }
-                worker.execute(() -> processCapture(composed, config, longPress, stageTwo));
+                final Bitmap captured = composed;
+                worker.execute(() -> processCapture(captured, config, longPress, stageTwo));
             });
             Handler handler = new Handler(pixelThread.getLooper());
             if (surface != null) PixelCopy.request(surface, source, listener, handler);
             else PixelCopy.request(activity.getWindow(), source, listener, handler);
         } catch (Exception ex) {
+            restorePendingWebView();
             source.recycle();
             button.setVisibility(View.VISIBLE);
             busy = false;
             show("IMG", 5500);
         }
+    }
+
+    private void restorePendingWebView() {
+        Runnable restore = pendingWebRestore;
+        pendingWebRestore = () -> {};
+        restore.run();
+    }
+
+    private WebView findLargestWebView(View view) {
+        WebView best = view instanceof WebView && view.getVisibility() == View.VISIBLE ? (WebView) view : null;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                WebView candidate = findLargestWebView(group.getChildAt(i));
+                if (candidate != null && (best == null || candidate.getWidth() * candidate.getHeight() > best.getWidth() * best.getHeight())) best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private void prepareWebView(WebView web, Config config, Runnable next) {
+        String script = "(function(){var a=[],n=0;var es=document.querySelectorAll('*');" +
+                "for(var i=0;i<es.length;i++){var e=es[i],s=getComputedStyle(e),r=e.getBoundingClientRect()," +
+                "z=parseInt(s.zIndex)||0,p=s.position,w=innerWidth,h=innerHeight;" +
+                "if((p==='fixed'||p==='sticky')&&z>=5&&r.width>=w*0.55&&r.height<=h*0.28&&" +
+                "(r.top<=h*0.25||r.bottom>=h*0.75)&&e.innerText.length<500){" +
+                "e.setAttribute('data-eujian-capture-hidden','1');e.style.setProperty('visibility','hidden','important');a.push(e);n++;}}" +
+                "return JSON.stringify({candidates:es.length,hidden:n});})()";
+        web.evaluateJavascript(script, value -> {
+            diag(config, "webview candidates=" + sanitizeDiag(value));
+            pendingWebRestore = () -> web.evaluateJavascript("(function(){var es=document.querySelectorAll('[data-eujian-capture-hidden=\\\"1\\\"]');for(var i=0;i<es.length;i++){es[i].style.removeProperty('visibility');es[i].removeAttribute('data-eujian-capture-hidden');}return es.length;})()", restored -> diag(config, "webview restored=" + sanitizeDiag(restored)));
+            web.postDelayed(next, 80);
+        });
+    }
+
+    private String sanitizeDiag(String value) {
+        if (value == null) return "null";
+        return value.replaceAll("[^0-9A-Za-z_=.:\\-]", "").substring(0, Math.min(80, value.replaceAll("[^0-9A-Za-z_=.:\\-]", "").length()));
+    }
+
+    private Bitmap cropToWebView(Bitmap source, WebView web, View decor) {
+        int[] origin = new int[2], location = new int[2];
+        decor.getLocationInWindow(origin); web.getLocationInWindow(location);
+        int left = Math.max(0, location[0] - origin[0]);
+        int top = Math.max(0, location[1] - origin[1]);
+        int width = Math.min(web.getWidth(), source.getWidth() - left);
+        int height = Math.min(web.getHeight(), source.getHeight() - top);
+        if (width < 1 || height < 1) return source;
+        Bitmap cropped = Bitmap.createBitmap(source, left, top, width, height);
+        source.recycle();
+        return cropped;
     }
 
     private SurfaceView findSurface(View view) {
@@ -315,7 +389,7 @@ public final class CaptureModule {
             } else if (answer.kind.equals("UNCLEAR")) {
                 show("?", 6500);
             } else {
-                show(answer.text, 9000);
+                show(formatAnswer(answer.text, config), 9000);
             }
         } catch (Exception ex) {
             diag(config, "gemini error=" + errorBadge(ex));
@@ -339,6 +413,9 @@ public final class CaptureModule {
         status.setBackground(badgeBackground(config.badgeBackground));
         FrameLayout.LayoutParams sp = (FrameLayout.LayoutParams) status.getLayoutParams();
         sp.bottomMargin = dp(config.badgeBottomOffsetDp);
+        sp.gravity = badgeGravity(config.badgeSide) | Gravity.BOTTOM;
+        sp.leftMargin = "left".equals(config.badgeSide) ? dp(8) : 0;
+        sp.rightMargin = "right".equals(config.badgeSide) ? dp(8) : 0;
         status.setLayoutParams(sp);
         button.setAlpha(config.buttonOpacity);
         button.setBackground(round(config.buttonColor, 28));
@@ -348,6 +425,23 @@ public final class CaptureModule {
         bp.leftMargin = config.buttonSide.equals("left") ? dp(8) : 0;
         bp.rightMargin = config.buttonSide.equals("right") ? dp(8) : 0;
         button.setLayoutParams(bp);
+    }
+
+    private int badgeGravity(String side) {
+        return "left".equals(side) ? Gravity.LEFT : "right".equals(side) ? Gravity.RIGHT : Gravity.CENTER_HORIZONTAL;
+    }
+
+    private String formatAnswer(String numeric, Config config) {
+        if (!"dots".equals(config.answerFormat)) return numeric;
+        StringBuilder out = new StringBuilder();
+        String[] values = numeric.split(",");
+        for (int b = 0; b < values.length; b++) {
+            int count;
+            try { count = Integer.parseInt(values[b]); } catch (NumberFormatException ex) { return numeric; }
+            if (b > 0) out.append("\n\n");
+            for (int i = 0; i < count; i++) { if (i > 0) out.append('\n'); out.append('•'); }
+        }
+        return out.toString();
     }
 
     private String errorBadge(Exception ex) {
@@ -443,6 +537,8 @@ public final class CaptureModule {
         cfg.badgeDurationMs = badge == null ? 3500 : badge.optInt("durationMs", 3500);
         cfg.badgeBottomOffsetDp = badge == null ? 120 : badge.optInt("bottomOffsetDp", 120);
         cfg.badgeBackground = badge == null ? "dark" : badge.optString("background", "dark");
+        cfg.badgeSide = badge == null ? "center" : badge.optString("side", "center");
+        cfg.answerFormat = obj.optString("answerFormat", "numeric");
         JSONObject buttonCfg = obj.optJSONObject("button");
         cfg.buttonOpacity = buttonCfg == null ? 0.55f : (float) buttonCfg.optDouble("opacity", 0.55);
         cfg.buttonSizeDp = buttonCfg == null ? 52 : buttonCfg.optInt("sizeDp", 52);
@@ -452,6 +548,8 @@ public final class CaptureModule {
                 || cfg.badgeTextSizeSp < 8 || cfg.badgeTextSizeSp > 24
                 || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000
                 || cfg.badgeBottomOffsetDp < 24 || cfg.badgeBottomOffsetDp > 400
+                || (!cfg.badgeSide.equals("left") && !cfg.badgeSide.equals("center") && !cfg.badgeSide.equals("right"))
+                || (!cfg.answerFormat.equals("numeric") && !cfg.answerFormat.equals("dots"))
                 || (!cfg.badgeBackground.equals("none") && !cfg.badgeBackground.equals("dark") && !cfg.badgeBackground.equals("light"))
                 || cfg.buttonOpacity < 0.0f || cfg.buttonOpacity > 1.0f
                 || cfg.buttonSizeDp < 32 || cfg.buttonSizeDp > 88
@@ -630,6 +728,8 @@ public final class CaptureModule {
         String buttonSide;
         int buttonColor;
         String badgeBackground;
+        String badgeSide;
+        String answerFormat;
         boolean diagnostic;
         final ArrayList<String> keys = new ArrayList<>();
         final ArrayList<Integer> keySlots = new ArrayList<>();

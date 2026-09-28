@@ -32,6 +32,7 @@ public final class SettingsActivity extends Activity {
     private String buttonSide = "right";
     private String buttonColor = "dark";
     private String badgeBackground = "dark";
+    private String badgeSide = "center", answerFormat = "numeric";
     private EditText modelField, keyField, labelField;
     private Switch enabledSwitch;
     private Switch diagnosticSwitch;
@@ -64,7 +65,9 @@ public final class SettingsActivity extends Activity {
             badgeOpacity = (int)Math.round(b.optDouble("opacity", .55) * 100);
             badgeSize = b.optInt("textSizeSp", 12); badgeBottom = b.optInt("bottomOffsetDp", 120);
             badgeBackground = b.optString("background", "dark");
+            badgeSide = b.optString("side", "center");
         }
+        answerFormat = config.optString("answerFormat", "numeric");
         JSONObject btn = config.optJSONObject("button");
         if (btn != null) {
             buttonOpacity = (int)Math.round(btn.optDouble("opacity", .55) * 100);
@@ -137,9 +140,15 @@ public final class SettingsActivity extends Activity {
         badge.addView(text("Latar badge", 14, PALE, true));
         LinearLayout badgeColors = new LinearLayout(this); badge.addView(badgeColors);
         for (String name : new String[]{"none", "dark", "light"}) { Button swatch = new Button(this); swatch.setText(name); swatch.setAllCaps(false); swatch.setTextColor(name.equals("light") ? 0xFF222222 : PALE); swatch.setBackground(round(name.equals("none") ? 0x00352B40 : name.equals("light") ? 0xCCF5F5F5 : 0xCC182027, 18, 0)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.setMargins(dp(2), dp(2), dp(2), dp(2)); badgeColors.addView(swatch, p); swatch.setOnClickListener(v -> { badgeBackground = name; renderPreview(); }); }
+        badge.addView(text("Posisi popup jawaban", 14, PALE, true));
+        LinearLayout badgeSides = new LinearLayout(this); badge.addView(badgeSides);
+        for (String name : new String[]{"left", "center", "right"}) { Button swatch = new Button(this); swatch.setText(name); swatch.setAllCaps(false); swatch.setTextColor(PALE); swatch.setBackground(round(0xFF392C4B, 18, 0)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.setMargins(dp(2), dp(2), dp(2), dp(2)); badgeSides.addView(swatch, p); swatch.setOnClickListener(v -> { badgeSide = name; renderPreview(); }); }
+        badge.addView(text("Format jawaban pilihan", 14, PALE, true));
+        LinearLayout answerFormats = new LinearLayout(this); badge.addView(answerFormats);
+        for (String name : new String[]{"numeric", "dots"}) { Button swatch = new Button(this); swatch.setText(name); swatch.setAllCaps(false); swatch.setTextColor(PALE); swatch.setBackground(round(0xFF392C4B, 18, 0)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.setMargins(dp(2), dp(2), dp(2), dp(2)); answerFormats.addView(swatch, p); swatch.setOnClickListener(v -> { answerFormat = name; sample = 0; renderPreview(); }); }
         badge.addView(button("Reset tampilan bawaan", false, () -> {
             badgeOpacity = 55; badgeSize = 12; badgeBottom = 120;
-            buttonOpacity = 55; buttonSize = 52; buttonSide = "right"; buttonColor = "dark"; badgeBackground = "dark"; buildScreen();
+            buttonOpacity = 55; buttonSize = 52; buttonSide = "right"; buttonColor = "dark"; badgeBackground = "dark"; badgeSide = "center"; answerFormat = "numeric"; buildScreen();
         }));
         body.addView(button("Simpan semua pengaturan", true, this::saveAll));
     }
@@ -245,7 +254,8 @@ public final class SettingsActivity extends Activity {
             config.put("keyTimeoutSeconds", keyTimeoutSeconds);
             config.put("diagnostic", diagnosticSwitch != null && diagnosticSwitch.isChecked());
             JSONObject badge = config.optJSONObject("badge"); if (badge == null) badge = new JSONObject();
-            badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("background", badgeBackground); config.put("badge", badge);
+            badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("background", badgeBackground).put("side", badgeSide); config.put("badge", badge);
+            config.put("answerFormat", answerFormat);
             JSONObject button = config.optJSONObject("button"); if (button == null) button = new JSONObject();
             button.put("opacity", buttonOpacity / 100.0).put("sizeDp", buttonSize).put("side", buttonSide).put("color", buttonColor); config.put("button", button);
             Bundle extras = new Bundle(); extras.putString("json", config.toString());
@@ -266,7 +276,9 @@ public final class SettingsActivity extends Activity {
         if (preview == null) return;
         previewBadge.setText(sample == 0 ? "1,2" : sample == 1 ? "1" : "✓");
         previewBadge.setTextSize(badgeSize); previewBadge.setAlpha(badgeOpacity / 100f); previewBadge.setBackground(round("none".equals(badgeBackground) ? 0x00352B40 : "light".equals(badgeBackground) ? 0xCCF5F5F5 : 0xCC182027, 8, 0));
-        FrameLayout.LayoutParams b = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        String sampleText = sample == 0 ? ("dots".equals(answerFormat) ? "•\n•\n\n•\n•" : "1,2") : sample == 1 ? ("dots".equals(answerFormat) ? "•" : "1") : "✓";
+        previewBadge.setText(sampleText);
+        FrameLayout.LayoutParams b = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | ("left".equals(badgeSide) ? Gravity.LEFT : "right".equals(badgeSide) ? Gravity.RIGHT : Gravity.CENTER_HORIZONTAL));
         b.bottomMargin = dp(Math.min(240, badgeBottom) * 300 / 700); previewBadge.setLayoutParams(b);
         previewButton.setAlpha(buttonOpacity / 100f); previewButton.setBackground(round(colorFor(buttonColor), 28, 0));
         FrameLayout.LayoutParams p = new FrameLayout.LayoutParams(dp(buttonSize), dp(buttonSize), (buttonSide.equals("left") ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL);

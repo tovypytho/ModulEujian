@@ -44,7 +44,9 @@ Skrip memvalidasi format, menulis lewat `content://media/.../downloads/<id>`, la
 
 `apiKeys` menerima maksimal 10 slot. Slot awal dipilih round robin dan kursor disimpan lintas pembukaan aplikasi. Setiap kegagalan, termasuk HTTP 429, langsung mencoba slot berikutnya tanpa cooldown. `keyTimeoutSeconds` (5–45, bawaan 15) membatasi waktu tiap slot; setelah batas itu request dibatalkan dan slot berikutnya dicoba. Distribusi slot awal merata bila daftar slot aktif tetap, tetapi jumlah request berhasil bisa berbeda karena failover. JSON lama di penyimpanan publik menyimpan key sebagai teks biasa; jangan taruh key nyata di Git, log, atau laporan. Modul tidak membutuhkan root.
 
-`badge` opsional. Nilai bawaan menempatkan badge di tengah bawah, sekitar 120 dp dari tepi bawah seperti pola popup ScreenPilot. `opacity` menerima 0.15–1.0, `textSizeSp` 8–24, `durationMs` 500–10000, dan `bottomOffsetDp` 24–400. `button` opsional: `opacity` 0.15–1.0, `sizeDp` 32–88, dan `side` `left` atau `right`. Konfigurasi lama tanpa kedua objek tetap memakai nilai bawaan.
+`badge` opsional. Nilai bawaan menempatkan badge di tengah bawah, sekitar 120 dp dari tepi bawah seperti pola popup ScreenPilot. `opacity` menerima 0.15–1.0, `textSizeSp` 8–24, `durationMs` 500–10000, `bottomOffsetDp` 24–400, dan `side` `left`, `center`, atau `right`. `answerFormat` bernilai `numeric` atau `dots`; mode dots menampilkan satu blok titik vertikal untuk setiap indeks jawaban. `button` opsional: `opacity` 0.15–1.0, `sizeDp` 32–88, dan `side` `left` atau `right`. Konfigurasi lama tanpa kedua objek tetap memakai nilai bawaan.
+
+Saat WebView terlihat, modul menjalankan clean viewport capture. Kandidat elemen HTML fixed/sticky yang lebar, berada di tepi viewport, dan memiliki z-index tinggi disembunyikan sementara selama capture lalu dipulihkan. Jika WebView tidak ditemukan, modul memakai capture Activity lama dan mencatat fallback pada diagnostic log. Heuristik tidak menyembunyikan elemen yang tidak memenuhi semua kriteria.
 
 ## Aplikasi pengaturan terpisah
 

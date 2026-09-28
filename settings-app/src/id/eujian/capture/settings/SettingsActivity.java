@@ -57,7 +57,23 @@ public final class SettingsActivity extends Activity {
             String json = loaded == null ? null : loaded.getString("json");
             config = json == null ? defaults() : new JSONObject(json);
         } catch (Exception ex) { config = defaults(); }
+        migrateNumericConfig();
         readAppearance(); buildScreen();
+    }
+    private void migrateNumericConfig() {
+        try {
+            JSONObject badge = config.optJSONObject("badge");
+            boolean changed = !"numeric".equals(config.optString("answerFormat", "numeric"));
+            if (badge != null) {
+                for (String field : new String[]{"xPercent", "yPercent", "dotVerticalGapDp", "dotHorizontalGapDp"}) {
+                    if (badge.has(field)) { badge.remove(field); changed = true; }
+                }
+            }
+            if (!changed) return;
+            config.put("answerFormat", "numeric");
+            Bundle extras = new Bundle(); extras.putString("json", config.toString());
+            getContentResolver().call(ConfigProvider.URI, "write", null, extras);
+        } catch (Exception ignored) { /* A later Save retries the migration. */ }
     }
     private JSONObject defaults() {
         JSONObject obj = new JSONObject();
@@ -73,7 +89,7 @@ public final class SettingsActivity extends Activity {
             badgeBackground = b.optString("background", "dark");
             badgeSide = b.optString("side", "center");
         }
-        answerFormat = config.optString("answerFormat", "numeric");
+        answerFormat = "numeric";
         JSONObject btn = config.optJSONObject("button");
         if (btn != null) {
             buttonOpacity = (int)Math.round(btn.optDouble("opacity", .55) * 100);
@@ -162,7 +178,7 @@ public final class SettingsActivity extends Activity {
         for (String name : new String[]{"left", "center", "right"}) { Button swatch = new Button(this); swatch.setText(name); swatch.setAllCaps(false); swatch.setTextColor(PALE); swatch.setBackground(round(0xFF392C4B, 18, 0)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.setMargins(dp(2), dp(2), dp(2), dp(2)); badgeSides.addView(swatch, p); swatch.setOnClickListener(v -> { badgeSide = name; renderPreview(); }); }
         badge.addView(text("Format jawaban pilihan", 14, PALE, true));
         LinearLayout answerFormats = new LinearLayout(this); badge.addView(answerFormats);
-        for (String name : new String[]{"numeric", "dots"}) { Button swatch = new Button(this); swatch.setText(name); swatch.setAllCaps(false); swatch.setTextColor(PALE); swatch.setBackground(round(0xFF392C4B, 18, 0)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.setMargins(dp(2), dp(2), dp(2), dp(2)); answerFormats.addView(swatch, p); swatch.setOnClickListener(v -> { answerFormat = name; sample = 0; renderPreview(); }); }
+        for (String name : new String[]{"numeric"}) { Button swatch = new Button(this); swatch.setText(name); swatch.setAllCaps(false); swatch.setTextColor(PALE); swatch.setBackground(round(0xFF392C4B, 18, 0)); LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(44), 1); p.setMargins(dp(2), dp(2), dp(2), dp(2)); answerFormats.addView(swatch, p); swatch.setOnClickListener(v -> { answerFormat = name; sample = 0; renderPreview(); }); }
         badge.addView(button("Reset tampilan bawaan", false, () -> {
             badgeOpacity = 55; badgeSize = 12; badgeBottom = 120;
             buttonOpacity = 55; buttonSize = 52; buttonSide = "right"; buttonColor = "dark"; badgeBackground = "dark"; badgeSide = "center"; answerFormat = "numeric"; buildScreen();
@@ -260,7 +276,9 @@ public final class SettingsActivity extends Activity {
                 report.append(" (").append(System.currentTimeMillis() - started).append(" ms)\n");
             }
             final int ok = good, total = active;
-            runOnUiThread(() -> { checkResults.setText("Cek selesai: " + ok + "/" + total + " slot aktif berhasil\n" + report); toast(ok == total ? "Semua key aktif" : "Lihat nomor slot yang gagal"); });
+            runOnUiThread(() -> { checkResults.setText("Cek selesai: " + ok + "/" + total + " slot aktif berhasil\n" + report
+                    + "HTTP 503/timeout dapat bersifat sementara. Slot tidak dinonaktifkan; ulangi tes nanti sebelum mengganti key.");
+                toast(ok == total ? "Semua key aktif" : "Lihat nomor slot yang gagal"); });
         }).start();
     }
     private void saveAll() {
@@ -273,8 +291,9 @@ public final class SettingsActivity extends Activity {
             config.put("diagnostic", diagnosticSwitch != null && diagnosticSwitch.isChecked());
             config.put("captureProbe", captureProbeSwitch != null && captureProbeSwitch.isChecked());
             JSONObject badge = config.optJSONObject("badge"); if (badge == null) badge = new JSONObject();
+            for (String field : new String[]{"xPercent", "yPercent", "dotVerticalGapDp", "dotHorizontalGapDp"}) badge.remove(field);
             badge.put("opacity", badgeOpacity / 100.0).put("textSizeSp", badgeSize).put("bottomOffsetDp", badgeBottom).put("background", badgeBackground).put("side", badgeSide); config.put("badge", badge);
-            config.put("answerFormat", answerFormat);
+            config.put("answerFormat", "numeric");
             JSONObject button = config.optJSONObject("button"); if (button == null) button = new JSONObject();
             button.put("opacity", buttonOpacity / 100.0).put("sizeDp", buttonSize).put("side", buttonSide).put("color", buttonColor); config.put("button", button);
             Bundle extras = new Bundle(); extras.putString("json", config.toString());

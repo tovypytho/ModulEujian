@@ -503,10 +503,10 @@ public final class CaptureModule {
                 diag(config, "badge_show category=unclear");
             } else {
                 show(formatAnswer(answer.text, config), 9000);
-                diag(config, "badge_show category=" + ("dots".equals(config.answerFormat) ? "dots" : "numeric"));
+                diag(config, "badge_show category=numeric");
             }
         } catch (Exception ex) {
-            diag(config, "gemini error=" + errorBadge(ex));
+            diag(config, "analysis_error category=" + errorCategory(ex) + " exception=" + ex.getClass().getSimpleName());
             show(errorBadge(ex), 7000);
         } finally {
             busy = false;
@@ -564,8 +564,23 @@ public final class CaptureModule {
         if (message.contains("Isi API key")) return "KEY";
         java.util.regex.Matcher http = java.util.regex.Pattern.compile("HTTP [0-9]{3}").matcher(message);
         if (http.find()) return http.group();
-        if (message.contains("Semua key")) return "KEY!";
+        if (message.startsWith("Semua ") && message.contains("slot gagal")) return "API";
         return "!";
+    }
+    private int httpStatus(Throwable ex) {
+        if (ex.getCause() != null && ex.getCause() != ex) return httpStatus(ex.getCause());
+        String message = ex.getMessage();
+        if (message == null) return 0;
+        java.util.regex.Matcher match = java.util.regex.Pattern.compile("HTTP ([0-9]{3})").matcher(message);
+        return match.find() ? Integer.parseInt(match.group(1)) : 0;
+    }
+    private String errorCategory(Throwable ex) {
+        if (ex.getCause() != null && ex.getCause() != ex) return errorCategory(ex.getCause());
+        if (ex instanceof java.net.SocketTimeoutException || ex instanceof TimeoutException) return "timeout";
+        if (httpStatus(ex) != 0) return "http";
+        if (ex instanceof JSONException || ex instanceof StopRotation) return "response_schema";
+        if (ex instanceof java.io.IOException) return "network_io";
+        return "local_unexpected";
     }
     private void diag(Config config, String message) {
         if (config == null || !config.diagnostic) return;
@@ -655,7 +670,7 @@ public final class CaptureModule {
         cfg.badgeBottomOffsetDp = badge == null ? 120 : badge.optInt("bottomOffsetDp", 120);
         cfg.badgeBackground = badge == null ? "dark" : badge.optString("background", "dark");
         cfg.badgeSide = badge == null ? "center" : badge.optString("side", "center");
-        cfg.answerFormat = obj.optString("answerFormat", "numeric");
+        cfg.answerFormat = "numeric";
         cfg.captureProbe = obj.optBoolean("captureProbe", false);
         JSONObject buttonCfg = obj.optJSONObject("button");
         cfg.buttonOpacity = buttonCfg == null ? 0.55f : (float) buttonCfg.optDouble("opacity", 0.55);
@@ -739,10 +754,13 @@ public final class CaptureModule {
         if (cfg.keys.isEmpty()) throw new Exception("Isi API key pada config.json");
         JSONObject request = new JSONObject();
         JSONArray parts = new JSONArray();
-        parts.put(new JSONObject().put("text", "Read all supplied screenshots as one exam question. "
-                + "If the question or options are incomplete, answer UNCLEAR; never guess. "
-                + "Return only JSON: {type: MULTIPLE_CHOICE|MULTIPLE_SELECT|FREE_RESPONSE|UNCLEAR, answers: [1..5], answer: string}. "
-                + "Use 1-based option indices. For an essay put the complete response in answer."));
+        parts.put(new JSONObject().put("text", "Read all supplied screenshots as one question. First classify the visible answer control and written instruction. "
+                + "Circular radio controls indicate a single-choice question: return exactly one option. Square checkbox controls indicate a selectable multiple-choice question: return all correct options, whether zero, one, or several boxes were already checked by the user. Existing checks do not prove correctness. "
+                + "A free-text answer area, such as a box marked 'Masukan jawaban kamu disini', indicates an essay only when selectable options are absent. Never return an essay for radio or checkbox options. "
+                + "There are usually four or five real options. If row five is only '-', it is a placeholder, not an answer; never select it. Follow the written question if it requires one or multiple responses. "
+                + "If the question, control, or necessary options are obscured or ambiguous, return UNKNOWN and UNCLEAR instead of guessing. "
+                + "Return only JSON with fields controlType RADIO|CHECKBOX|TEXTAREA|UNKNOWN, questionType SINGLE|MULTI|ESSAY|UNKNOWN, type MULTIPLE_CHOICE|MULTIPLE_SELECT|FREE_RESPONSE|UNCLEAR, option5Placeholder boolean, answers array of 1-based indices 1..5, and answer string. "
+                + "For an essay, answer each requested part in order, concisely and clearly, including examples or reasons specifically requested. Do not add filler or explanations to choice answers."));
         for (byte[] image : images) {
             JSONObject data = new JSONObject().put("mimeType", "image/jpeg")
                     .put("data", Base64.encodeToString(image, Base64.NO_WRAP));
@@ -771,8 +789,12 @@ public final class CaptureModule {
             } catch (TimeoutException ex) { last = ex; diag(cfg, "gemini slot=" + slot + " timeout"); }
             catch (Exception ex) {
                 Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                if (cause instanceof StopRotation) {
+                    diag(cfg, "gemini slot=" + slot + " response_invalid category=response_schema");
+                    return new Answer("UNCLEAR", "");
+                }
                 last = ex;
-                diag(cfg, "gemini slot=" + slot + " failure=" + cause.getMessage());
+                diag(cfg, "gemini slot=" + slot + " failure=" + errorCategory(cause) + " httpStatus=" + httpStatus(cause));
             } finally {
                 pending.cancel(true);
                 HttpURLConnection conn = activeConnection.get();
@@ -801,16 +823,29 @@ public final class CaptureModule {
                 byte[] b = new byte[8192]; int n;
                 while ((n = in.read(b)) >= 0) { response.write(b, 0, n); if (response.size() > 1048576) throw new Exception("Respons terlalu besar"); }
             }
-            JSONObject envelope = new JSONObject(response.toString("UTF-8"));
-            String text = envelope.getJSONArray("candidates").getJSONObject(0)
-                    .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
-            return parseAnswer(new JSONObject(text));
+            try {
+                JSONObject envelope = new JSONObject(response.toString("UTF-8"));
+                String text = envelope.getJSONArray("candidates").getJSONObject(0)
+                        .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
+                return parseAnswer(new JSONObject(text));
+            } catch (JSONException ex) { throw new StopRotation("response_schema"); }
         } finally { conn.disconnect(); }
     }
 
     private Answer parseAnswer(JSONObject obj) throws JSONException {
+        String controlType = obj.optString("controlType", "UNKNOWN");
+        String questionType = obj.optString("questionType", "UNKNOWN");
         String kind = obj.optString("type", "UNCLEAR");
-        if (kind.equals("UNCLEAR")) return new Answer(kind, "");
+        if (kind.equals("UNCLEAR") || questionType.equals("UNKNOWN") || controlType.equals("UNKNOWN")) return new Answer("UNCLEAR", "");
+        if ((controlType.equals("RADIO") && !questionType.equals("SINGLE"))
+                || (controlType.equals("CHECKBOX") && !questionType.equals("MULTI"))
+                || (controlType.equals("TEXTAREA") && !questionType.equals("ESSAY"))
+                || (!controlType.equals("RADIO") && !controlType.equals("CHECKBOX") && !controlType.equals("TEXTAREA")))
+            return new Answer("UNCLEAR", "");
+        if ((questionType.equals("SINGLE") && !kind.equals("MULTIPLE_CHOICE"))
+                || (questionType.equals("MULTI") && !kind.equals("MULTIPLE_SELECT"))
+                || (questionType.equals("ESSAY") && !kind.equals("FREE_RESPONSE")))
+            return new Answer("UNCLEAR", "");
         if (kind.equals("FREE_RESPONSE")) {
             String answer = obj.getString("answer").trim();
             if (answer.isEmpty() || answer.length() > 12000) throw new JSONException("Esai kosong atau terlalu panjang");
@@ -820,15 +855,15 @@ public final class CaptureModule {
         JSONArray values = obj.getJSONArray("answers");
         if (values.length() < 1 || values.length() > 5 || (kind.equals("MULTIPLE_CHOICE") && values.length() != 1))
             throw new JSONException("Jumlah pilihan tidak valid");
-        StringBuilder text = new StringBuilder();
         boolean[] seen = new boolean[6];
         for (int i = 0; i < values.length(); i++) {
             int v = values.getInt(i);
             if (v < 1 || v > 5 || seen[v]) throw new JSONException("Pilihan tidak valid");
+            if (v == 5 && obj.optBoolean("option5Placeholder", false)) return new Answer("UNCLEAR", "");
             seen[v] = true;
-            if (i > 0) text.append(',');
-            text.append(v);
         }
+        StringBuilder text = new StringBuilder();
+        for (int v = 1; v <= 5; v++) if (seen[v]) { if (text.length() > 0) text.append(','); text.append(v); }
         return new Answer(kind, text.toString());
     }
 

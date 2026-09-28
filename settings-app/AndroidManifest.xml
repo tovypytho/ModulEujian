@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="id.eujian.capture.settings">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <permission android:name="id.eujian.capture.settings.PROJECTION" android:protectionLevel="signature" />
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
     <application android:label="E-Ujian Settings" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:usesCleartextTraffic="false">
         <provider android:name=".ConfigProvider" android:authorities="id.eujian.capture.settings.config" android:exported="true" />
@@ -10,5 +14,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service android:name=".MediaProjectionService" android:exported="true" android:permission="id.eujian.capture.settings.PROJECTION" android:foregroundServiceType="mediaProjection" />
     </application>
 </manifest>

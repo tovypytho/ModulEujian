@@ -43,6 +43,8 @@ $providerQuery = '        <provider android:authorities="id.eujian.capture.setti
 if (([regex]::Matches($manifestSource, [regex]::Escape($queryAnchor))).Count -ne 1) { throw 'Unexpected manifest queries count' }
 if ($manifestSource.Contains($providerQuery)) { throw 'Settings provider query already present' }
 $manifestPatched = $manifestSource.Replace($queryAnchor, $queryAnchor + $newline + $providerQuery)
+$projectionUse = '    <uses-permission android:name="id.eujian.capture.settings.PROJECTION"/>'
+$manifestPatched = $manifestPatched.Replace('<application', $projectionUse + $newline + '    <application')
 [IO.File]::WriteAllText($manifest, $manifestPatched, [Text.UTF8Encoding]::new($false))
 
 $unsigned = Join-Path $out 'unsigned.apk'

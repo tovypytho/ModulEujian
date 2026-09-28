@@ -17,6 +17,7 @@ import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.media.projection.MediaProjectionManager;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import org.json.JSONArray;
@@ -38,7 +39,9 @@ public final class SettingsActivity extends Activity {
     private Switch diagnosticSwitch;
     private Switch captureProbeSwitch;
     private static final int EXPORT_LOG = 17;
+    private static final int REQUEST_PROJECTION = 18;
     private TextView slotStatus, checkResults, connectionStatus, previewBadge, previewButton;
+    private TextView projectionStatus;
     private int keyTimeoutSeconds = 15;
     private FrameLayout preview;
     private LinearLayout slotGrid;
@@ -56,7 +59,7 @@ public final class SettingsActivity extends Activity {
     }
     private JSONObject defaults() {
         JSONObject obj = new JSONObject();
-        try { obj.put("model", "gemini-2.5-flash").put("jpegQuality", 80).put("longPressMs", 650).put("apiKeys", new JSONArray()); }
+        try { obj.put("model", "gemini-2.5-flash").put("jpegQuality", 80).put("longPressMs", 650).put("captureEngine", "auto").put("apiKeys", new JSONArray()); }
         catch (Exception ignored) {}
         return obj;
     }
@@ -107,6 +110,12 @@ public final class SettingsActivity extends Activity {
         keys.addView(text("Strategi: Round Robin", 15, LAVENDER, true));
         keys.addView(text("Setiap analisis memulai dari slot berikutnya. Kegagalan langsung mencoba slot lain tanpa cooldown.", 13, MUTED, false));
         slider(keys, "Batas tunggu per slot (detik)", 5, 45, keyTimeoutSeconds, v -> keyTimeoutSeconds = v); showSlot();
+        LinearLayout projection = card(body, "▣  MediaProjection Capture");
+        projection.addView(text("Aktifkan sebelum membuka E-Ujian. Sesi dipertahankan oleh foreground service.", 13, MUTED, false));
+        projectionStatus = text(projectionStatusText(), 14, LAVENDER, true); projection.addView(projectionStatus);
+        projection.addView(button("Aktifkan screen capture", true, this::requestProjection));
+        projection.addView(button("Hentikan screen capture", false, () -> { Intent stop = new Intent(this, MediaProjectionService.class); stop.setAction(MediaProjectionService.ACTION_STOP); startService(stop); projectionStatus.setText("STOPPED"); }));
+        projection.addView(text("Vivo: izinkan notifikasi, battery Unrestricted, autostart, dan kunci Settings di Recent Apps bila tersedia.", 12, MUTED, false));
         diagnosticSwitch = new Switch(this); diagnosticSwitch.setText("Aktifkan diagnostic log (tanpa key/soal/jawaban)"); diagnosticSwitch.setTextColor(PALE); diagnosticSwitch.setChecked(config.optBoolean("diagnostic", false)); keys.addView(diagnosticSwitch);
         captureProbeSwitch = new Switch(this); captureProbeSwitch.setText("Capture diagnostic probe (simpan varian gambar)"); captureProbeSwitch.setTextColor(PALE); captureProbeSwitch.setChecked(config.optBoolean("captureProbe", false)); keys.addView(captureProbeSwitch);
         keys.addView(text("Probe menyimpan varian direct WebView dan surface composition ke album tanpa mengirimnya ke Gemini.", 12, MUTED, false));
@@ -254,6 +263,7 @@ public final class SettingsActivity extends Activity {
             storeCurrentSlot();
             String model = modelField.getText().toString().trim(); if (!model.matches("[A-Za-z0-9._-]{3,100}")) { toast("Nama model tidak valid"); return; }
             config.put("model", model).put("strategy", "round_robin");
+            config.put("captureEngine", config.optString("captureEngine", "auto"));
             config.put("keyTimeoutSeconds", keyTimeoutSeconds);
             config.put("diagnostic", diagnosticSwitch != null && diagnosticSwitch.isChecked());
             config.put("captureProbe", captureProbeSwitch != null && captureProbeSwitch.isChecked());
@@ -267,6 +277,13 @@ public final class SettingsActivity extends Activity {
             if (saved == null || !saved.getBoolean("saved")) throw new Exception("Not saved");
             connectionStatus.setText(connectionText()); toast("Pengaturan tersimpan untuk E-Ujian");
         } catch (Exception ex) { toast("Gagal menyimpan pengaturan: " + ex.getClass().getSimpleName()); }
+    }
+    private String projectionStatusText() {
+        return getSharedPreferences("projection", 0).getString("status", "NOT_CONFIGURED");
+    }
+    private void requestProjection() {
+        MediaProjectionManager manager = (MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE);
+        startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_PROJECTION);
     }
     private String connectionText() {
         try {
@@ -325,6 +342,15 @@ public final class SettingsActivity extends Activity {
     private void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == REQUEST_PROJECTION) {
+            if (result == RESULT_OK && data != null) {
+                Intent start = new Intent(this, MediaProjectionService.class).setAction(MediaProjectionService.ACTION_START);
+                start.putExtra("resultCode", result); start.putExtra("resultData", data);
+                if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(start); else startService(start);
+                if (projectionStatus != null) projectionStatus.setText("REQUESTING_PERMISSION / STARTING");
+            } else if (projectionStatus != null) projectionStatus.setText("REQUIRES_REAUTH");
+            return;
+        }
         if (request != EXPORT_LOG || result != RESULT_OK || data == null || data.getData() == null) return;
         try {
             Bundle response = getContentResolver().call(ConfigProvider.URI, "exportLog", null, null);

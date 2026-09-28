@@ -6,9 +6,13 @@ import android.content.ClipboardManager;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.ComponentName;
+import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -17,6 +21,9 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.os.IBinder;
+import android.os.Parcel;
+import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.Gravity;
@@ -67,6 +74,7 @@ public final class CaptureModule {
     private long touchDown;
     private int keyCursor;
     private Runnable pendingWebRestore = () -> {};
+    private static final int PROJECTION_STATUS = 1, PROJECTION_FRAME = 2;
 
     public static void install(final Activity activity) {
         if (Build.VERSION.SDK_INT < 29) return;
@@ -182,6 +190,14 @@ public final class CaptureModule {
     }
 
     private void capture(Config config, boolean longPress, boolean stageTwo) {
+        if (!"in_process".equals(config.captureEngine)) {
+            requestProjectionFrame(config, longPress, stageTwo);
+            return;
+        }
+        captureInProcess(config, longPress, stageTwo);
+    }
+
+    private void captureInProcess(Config config, boolean longPress, boolean stageTwo) {
         View decor = activity.getWindow().getDecorView();
         WebView web = findLargestWebView(decor);
         if (web != null) {
@@ -190,6 +206,47 @@ public final class CaptureModule {
         }
         diag(config, "capture fallback=no_webview");
         capturePrepared(config, longPress, stageTwo, null);
+    }
+
+    private void requestProjectionFrame(Config config, boolean longPress, boolean stageTwo) {
+        Intent intent = new Intent(); intent.setComponent(new ComponentName("id.eujian.capture.settings", "id.eujian.capture.settings.MediaProjectionService"));
+        final ServiceConnection[] connectionHolder = new ServiceConnection[1];
+        ServiceConnection connection = new ServiceConnection() {
+            public void onServiceConnected(ComponentName name, IBinder binder) {
+                worker.execute(() -> {
+                    try {
+                        Parcel statusData = Parcel.obtain(), statusReply = Parcel.obtain();
+                        binder.transact(PROJECTION_STATUS, statusData, statusReply, 0);
+                        boolean ready = statusReply.readInt() == 1; statusData.recycle(); statusReply.recycle();
+                        if (!ready) throw new Exception("projection_not_ready");
+                        Parcel data = Parcel.obtain(), reply = Parcel.obtain();
+                        if (!binder.transact(PROJECTION_FRAME, data, reply, 0)) throw new Exception("frame_unavailable");
+                        ParcelFileDescriptor pfd = reply.readParcelable(ParcelFileDescriptor.class.getClassLoader());
+                        if (pfd == null) throw new Exception("frame_pipe_null");
+                        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                        try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(pfd)) { byte[] buf = new byte[8192]; int n; while ((n = in.read(buf)) >= 0) bytes.write(buf,0,n); }
+                        data.recycle(); reply.recycle();
+                        Bitmap bitmap = BitmapFactory.decodeByteArray(bytes.toByteArray(), 0, bytes.size());
+                        if (bitmap == null) throw new Exception("frame_decode_failed");
+                        activity.runOnUiThread(() -> { try { activity.unbindService(connectionHolder[0]); } catch (Exception ignored) {} });
+                        processCapture(bitmap, config, longPress, stageTwo);
+                    } catch (Exception ex) {
+                        activity.runOnUiThread(() -> { try { activity.unbindService(connectionHolder[0]); } catch (Exception ignored) {} });
+                        diag(config, "capture_engine=media_projection unavailable=" + ex.getClass().getSimpleName());
+                        if ("auto".equals(config.captureEngine)) activity.runOnUiThread(() -> captureInProcess(config, longPress, stageTwo));
+                        else { busy = false; show("MP", 6500); }
+                    }
+                });
+            }
+            public void onServiceDisconnected(ComponentName name) { diag(config, "capture_engine=media_projection disconnected"); }
+        };
+        connectionHolder[0] = connection;
+        try {
+            if (!activity.bindService(intent, connection, Context.BIND_AUTO_CREATE)) throw new Exception("bind_failed");
+        } catch (Exception ex) {
+            diag(config, "capture_engine=media_projection bind_failed");
+            if ("auto".equals(config.captureEngine)) captureInProcess(config, longPress, stageTwo); else { busy = false; show("MP", 6500); }
+        }
     }
 
     private void capturePrepared(Config config, boolean longPress, boolean stageTwo, WebView web) {
@@ -583,7 +640,9 @@ public final class CaptureModule {
         JSONObject obj = new JSONObject(json);
         Config cfg = new Config();
         cfg.model = obj.optString("model", "gemini-2.5-flash");
+        cfg.captureEngine = obj.optString("captureEngine", "auto");
         if (!cfg.model.matches("[A-Za-z0-9._-]{3,100}")) throw new Exception("Nama model tidak valid");
+        if (!cfg.captureEngine.equals("auto") && !cfg.captureEngine.equals("media_projection") && !cfg.captureEngine.equals("in_process")) throw new Exception("captureEngine tidak valid");
         cfg.jpegQuality = obj.optInt("jpegQuality", 80);
         cfg.longPressMs = obj.optInt("longPressMs", 650);
         cfg.keyTimeoutSeconds = obj.optInt("keyTimeoutSeconds", 15);
@@ -787,6 +846,7 @@ public final class CaptureModule {
         String badgeBackground;
         String badgeSide;
         String answerFormat;
+        String captureEngine;
         boolean diagnostic;
         boolean captureProbe;
         final ArrayList<String> keys = new ArrayList<>();

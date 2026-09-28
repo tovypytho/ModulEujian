@@ -234,7 +234,7 @@ public final class CaptureModule {
                         activity.runOnUiThread(() -> { try { activity.unbindService(connectionHolder[0]); } catch (Exception ignored) {} });
                         diag(config, "capture_engine=media_projection unavailable=" + ex.getClass().getSimpleName());
                         if ("auto".equals(config.captureEngine)) activity.runOnUiThread(() -> captureInProcess(config, longPress, stageTwo));
-                        else { busy = false; show("MP", 6500); }
+                        else { busy = false; activity.runOnUiThread(() -> button.setVisibility(View.VISIBLE)); show("MP", 6500); }
                     }
                 });
             }
@@ -245,7 +245,7 @@ public final class CaptureModule {
             if (!activity.bindService(intent, connection, Context.BIND_AUTO_CREATE)) throw new Exception("bind_failed");
         } catch (Exception ex) {
             diag(config, "capture_engine=media_projection bind_failed");
-            if ("auto".equals(config.captureEngine)) captureInProcess(config, longPress, stageTwo); else { busy = false; show("MP", 6500); }
+            if ("auto".equals(config.captureEngine)) captureInProcess(config, longPress, stageTwo); else { busy = false; button.setVisibility(View.VISIBLE); show("MP", 6500); }
         }
     }
 
@@ -464,6 +464,7 @@ public final class CaptureModule {
     }
 
     private void processCapture(Bitmap bitmap, Config config, boolean longPress, boolean stageTwo) {
+        ui.post(() -> button.setVisibility(View.VISIBLE));
         diag(config, "capture stageTwo=" + stageTwo + " bytesPending");
         try {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -509,6 +510,7 @@ public final class CaptureModule {
             show(errorBadge(ex), 7000);
         } finally {
             busy = false;
+            ui.post(() -> button.setVisibility(View.VISIBLE));
         }
     }
 

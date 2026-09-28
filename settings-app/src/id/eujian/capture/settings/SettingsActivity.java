@@ -2,6 +2,8 @@ package id.eujian.capture.settings;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.provider.Settings;
+import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -115,6 +117,9 @@ public final class SettingsActivity extends Activity {
         projectionStatus = text(projectionStatusText(), 14, LAVENDER, true); projection.addView(projectionStatus);
         projection.addView(button("Aktifkan screen capture", true, this::requestProjection));
         projection.addView(button("Hentikan screen capture", false, () -> { Intent stop = new Intent(this, MediaProjectionService.class); stop.setAction(MediaProjectionService.ACTION_STOP); startService(stop); projectionStatus.setText("STOPPED"); }));
+        projection.addView(button("Izinkan notifikasi", false, () -> startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()))));
+        projection.addView(button("Buka pengaturan baterai", false, () -> startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))));
+        projection.addView(button("Buka info aplikasi / autostart", false, () -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())))));
         projection.addView(text("Vivo: izinkan notifikasi, battery Unrestricted, autostart, dan kunci Settings di Recent Apps bila tersedia.", 12, MUTED, false));
         diagnosticSwitch = new Switch(this); diagnosticSwitch.setText("Aktifkan diagnostic log (tanpa key/soal/jawaban)"); diagnosticSwitch.setTextColor(PALE); diagnosticSwitch.setChecked(config.optBoolean("diagnostic", false)); keys.addView(diagnosticSwitch);
         captureProbeSwitch = new Switch(this); captureProbeSwitch.setText("Capture diagnostic probe (simpan varian gambar)"); captureProbeSwitch.setTextColor(PALE); captureProbeSwitch.setChecked(config.optBoolean("captureProbe", false)); keys.addView(captureProbeSwitch);
@@ -281,6 +286,7 @@ public final class SettingsActivity extends Activity {
     private String projectionStatusText() {
         return getSharedPreferences("projection", 0).getString("status", "NOT_CONFIGURED");
     }
+    @Override protected void onResume() { super.onResume(); if (projectionStatus != null) projectionStatus.setText(projectionStatusText()); }
     private void requestProjection() {
         MediaProjectionManager manager = (MediaProjectionManager)getSystemService(MEDIA_PROJECTION_SERVICE);
         startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_PROJECTION);

@@ -67,7 +67,9 @@ public final class CaptureModule {
     private final ExecutorService requests = Executors.newCachedThreadPool();
     private final TextView button;
     private final TextView status;
+    private final DotBadgeView dots;
     private final Runnable hideStatus;
+    private Config currentConfig;
     private volatile boolean busy;
     private volatile byte[] staged;
     private volatile long stagedAt;
@@ -123,9 +125,11 @@ public final class CaptureModule {
         FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         sp.bottomMargin = dp(120);
         decor.addView(status, sp);
+        dots = new DotBadgeView(activity);
+        dots.setVisibility(View.GONE);
+        decor.addView(dots, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.LEFT));
         decor.setOnTouchListener((v, e) -> {
-            if (e.getActionMasked() == MotionEvent.ACTION_DOWN && status.getVisibility() == View.VISIBLE)
-                status.setVisibility(View.GONE);
+            if (e.getActionMasked() == MotionEvent.ACTION_DOWN) dismissBadge();
             return false;
         });
         attachDismissListener(decor);
@@ -149,10 +153,9 @@ public final class CaptureModule {
 
     private int dp(int value) { return (int) (value * activity.getResources().getDisplayMetrics().density + 0.5f); }
     private void attachDismissListener(View view) {
-        if (view != button && view != status) {
+        if (view != button && view != status && view != dots) {
             view.setOnTouchListener((v, e) -> {
-                if (e.getActionMasked() == MotionEvent.ACTION_DOWN && status.getVisibility() == View.VISIBLE)
-                    status.setVisibility(View.GONE);
+                if (e.getActionMasked() == MotionEvent.ACTION_DOWN) dismissBadge();
                 return false;
             });
         }
@@ -184,6 +187,7 @@ public final class CaptureModule {
         busy = true;
         button.setVisibility(View.INVISIBLE);
         status.setVisibility(View.INVISIBLE);
+        dots.setVisibility(View.INVISIBLE);
         FrameLayout decor = (FrameLayout) activity.getWindow().getDecorView();
         // Give the window a frame to draw without either of our views.
         decor.postDelayed(() -> capture(config, longPress, stageTwo), 50);
@@ -502,11 +506,12 @@ public final class CaptureModule {
                 show("?", 6500);
                 diag(config, "badge_show category=unclear");
             } else {
-                show(formatAnswer(answer.text, config), 9000);
+                if ("dots".equals(config.answerFormat)) showDots(answer.text, config);
+                else show(answer.text, 9000);
                 diag(config, "badge_show category=" + ("dots".equals(config.answerFormat) ? "dots" : "numeric"));
             }
         } catch (Exception ex) {
-            diag(config, "gemini error=" + errorBadge(ex));
+            diag(config, "analysis_error stage=process category=" + errorCategory(ex) + " exception=" + ex.getClass().getSimpleName());
             show(errorBadge(ex), 7000);
         } finally {
             busy = false;
@@ -516,22 +521,58 @@ public final class CaptureModule {
 
     private void show(String message, long ms) {
         ui.post(() -> {
+            dots.setVisibility(View.GONE);
             status.setText(message);
             status.setVisibility(View.VISIBLE);
+            placeBadge(status);
             ui.removeCallbacks(hideStatus);
         });
     }
 
+    private void showDots(String numeric, Config config) {
+        String[] parts = numeric.split(",");
+        int[] values = new int[parts.length];
+        try { for (int i = 0; i < parts.length; i++) values[i] = Integer.parseInt(parts[i]); }
+        catch (NumberFormatException ex) { show("?", 6500); return; }
+        ui.post(() -> {
+            status.setVisibility(View.GONE);
+            dots.configure(values, config.dotVerticalGapDp, config.dotHorizontalGapDp, config.badgeTextSizeSp);
+            dots.setVisibility(View.VISIBLE);
+            placeBadge(dots);
+        });
+    }
+
+    private void dismissBadge() { status.setVisibility(View.GONE); dots.setVisibility(View.GONE); }
+
+    private void placeBadge(View badge) {
+        Config config = currentConfig;
+        if (config == null) return;
+        FrameLayout decor = (FrameLayout) activity.getWindow().getDecorView();
+        decor.post(() -> {
+            badge.measure(View.MeasureSpec.makeMeasureSpec(decor.getWidth(), View.MeasureSpec.AT_MOST),
+                    View.MeasureSpec.makeMeasureSpec(decor.getHeight(), View.MeasureSpec.AT_MOST));
+            int margin = dp(8);
+            int travelX = Math.max(0, decor.getWidth() - badge.getMeasuredWidth() - margin * 2);
+            int travelY = Math.max(0, decor.getHeight() - badge.getMeasuredHeight() - margin * 2);
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) badge.getLayoutParams();
+            lp.gravity = Gravity.TOP | Gravity.LEFT;
+            lp.leftMargin = margin + Math.round(travelX * config.badgeXPercent / 100f);
+            lp.topMargin = margin + Math.round(travelY * config.badgeYPercent / 100f);
+            badge.setLayoutParams(lp);
+        });
+    }
+
     private void applyAppearance(Config config) {
+        currentConfig = config;
         status.setTextSize(config.badgeTextSizeSp);
+        status.setTextColor("light".equals(config.badgeBackground) ? Color.BLACK : Color.WHITE);
         status.setAlpha(config.badgeOpacity);
         status.setBackground(badgeBackground(config.badgeBackground));
-        FrameLayout.LayoutParams sp = (FrameLayout.LayoutParams) status.getLayoutParams();
-        sp.bottomMargin = dp(config.badgeBottomOffsetDp);
-        sp.gravity = badgeGravity(config.badgeSide) | Gravity.BOTTOM;
-        sp.leftMargin = "left".equals(config.badgeSide) ? dp(8) : 0;
-        sp.rightMargin = "right".equals(config.badgeSide) ? dp(8) : 0;
-        status.setLayoutParams(sp);
+        dots.setAlpha(config.badgeOpacity);
+        dots.setDotColor("light".equals(config.badgeBackground) ? Color.BLACK : Color.WHITE);
+        dots.setBackground(badgeBackground(config.badgeBackground));
+        placeBadge(status);
+        placeBadge(dots);
         button.setAlpha(config.buttonOpacity);
         button.setBackground(round(config.buttonColor, 28));
         FrameLayout.LayoutParams bp = (FrameLayout.LayoutParams) button.getLayoutParams();
@@ -566,6 +607,16 @@ public final class CaptureModule {
         if (http.find()) return http.group();
         if (message.contains("Semua key")) return "KEY!";
         return "!";
+    }
+    private String errorCategory(Throwable ex) {
+        if (ex.getCause() != null && ex.getCause() != ex) return errorCategory(ex.getCause());
+        String message = ex.getMessage();
+        if (ex instanceof java.net.SocketTimeoutException || ex instanceof TimeoutException) return "timeout";
+        if (message != null && message.matches(".*HTTP [0-9]{3}.*")) return "http";
+        if (ex instanceof JSONException) return "response_schema";
+        if (ex instanceof java.io.IOException) return "network_io";
+        if (message != null && message.contains("Gambar")) return "image";
+        return "local_unexpected";
     }
     private void diag(Config config, String message) {
         if (config == null || !config.diagnostic) return;
@@ -655,6 +706,13 @@ public final class CaptureModule {
         cfg.badgeBottomOffsetDp = badge == null ? 120 : badge.optInt("bottomOffsetDp", 120);
         cfg.badgeBackground = badge == null ? "dark" : badge.optString("background", "dark");
         cfg.badgeSide = badge == null ? "center" : badge.optString("side", "center");
+        cfg.dotVerticalGapDp = badge == null ? 2 : badge.optInt("dotVerticalGapDp", 2);
+        cfg.dotHorizontalGapDp = badge == null ? 8 : badge.optInt("dotHorizontalGapDp", 8);
+        cfg.badgeXPercent = badge != null && badge.has("xPercent") ? badge.optInt("xPercent", 50)
+                : "left".equals(cfg.badgeSide) ? 0 : "right".equals(cfg.badgeSide) ? 100 : 50;
+        int screenHeightDp = Math.max(1, Math.round(activity.getResources().getDisplayMetrics().heightPixels / activity.getResources().getDisplayMetrics().density));
+        cfg.badgeYPercent = badge != null && badge.has("yPercent") ? badge.optInt("yPercent", 85)
+                : Math.max(0, Math.min(100, 100 - Math.round(cfg.badgeBottomOffsetDp * 100f / screenHeightDp)));
         cfg.answerFormat = obj.optString("answerFormat", "numeric");
         cfg.captureProbe = obj.optBoolean("captureProbe", false);
         JSONObject buttonCfg = obj.optJSONObject("button");
@@ -666,6 +724,10 @@ public final class CaptureModule {
                 || cfg.badgeTextSizeSp < 8 || cfg.badgeTextSizeSp > 24
                 || cfg.badgeDurationMs < 500 || cfg.badgeDurationMs > 10000
                 || cfg.badgeBottomOffsetDp < 24 || cfg.badgeBottomOffsetDp > 400
+                || cfg.dotVerticalGapDp < 0 || cfg.dotVerticalGapDp > 12
+                || cfg.dotHorizontalGapDp < 0 || cfg.dotHorizontalGapDp > 32
+                || cfg.badgeXPercent < 0 || cfg.badgeXPercent > 100
+                || cfg.badgeYPercent < 0 || cfg.badgeYPercent > 100
                 || (!cfg.badgeSide.equals("left") && !cfg.badgeSide.equals("center") && !cfg.badgeSide.equals("right"))
                 || (!cfg.answerFormat.equals("numeric") && !cfg.answerFormat.equals("dots"))
                 || (!cfg.badgeBackground.equals("none") && !cfg.badgeBackground.equals("dark") && !cfg.badgeBackground.equals("light"))
@@ -739,10 +801,15 @@ public final class CaptureModule {
         if (cfg.keys.isEmpty()) throw new Exception("Isi API key pada config.json");
         JSONObject request = new JSONObject();
         JSONArray parts = new JSONArray();
-        parts.put(new JSONObject().put("text", "Read all supplied screenshots as one exam question. "
-                + "If the question or options are incomplete, answer UNCLEAR; never guess. "
-                + "Return only JSON: {type: MULTIPLE_CHOICE|MULTIPLE_SELECT|FREE_RESPONSE|UNCLEAR, answers: [1..5], answer: string}. "
-                + "Use 1-based option indices. For an essay put the complete response in answer."));
+        parts.put(new JSONObject().put("text", "Read all supplied screenshots as one question. First classify the question format. "
+                + "Radio circles normally mean one choice; square checkboxes may allow multiple choices. Read the written instructions and visible answer controls together. "
+                + "Radio and checkbox questions normally have four or five options. A fifth row containing only '-' is a placeholder, not a valid answer and does not make four real options incomplete. Never choose the '-' placeholder. "
+                + "A checked checkbox may reflect an earlier user selection and is not evidence that the choice is correct. Classify by the square control even when no box is checked. "
+                + "If instructions and controls conflict, or the question/options are incomplete, classify UNKNOWN and return UNCLEAR; never guess. "
+                + "A free-text answer box, for example one with the placeholder 'Masukan jawaban kamu disini', is a strong ESSAY cue when no selectable answer options are shown. Do not classify a question with numbered answer options as an essay. "
+                + "Return only JSON with controlType RADIO|CHECKBOX|TEXTAREA|UNKNOWN, questionType SINGLE|MULTI|ESSAY|UNKNOWN, type MULTIPLE_CHOICE|MULTIPLE_SELECT|FREE_RESPONSE|UNCLEAR, option5Placeholder boolean, answers array of 1-based option indices 1..5, and answer string. "
+                + "SINGLE requires exactly one choice, MULTI may contain multiple choices. For ESSAY, address every requested subpart in the question in a logical sequence, with concise and direct wording, without omitting required examples or reasons and without repetitive filler. "
+                + "UNKNOWN must use UNCLEAR with no answer. Do not include explanations for choice questions."));
         for (byte[] image : images) {
             JSONObject data = new JSONObject().put("mimeType", "image/jpeg")
                     .put("data", Base64.encodeToString(image, Base64.NO_WRAP));
@@ -766,13 +833,17 @@ public final class CaptureModule {
             Future<Answer> pending = requests.submit(() -> requestGemini(endpoint, key, payload, activeConnection));
             try {
                 Answer answer = pending.get(cfg.keyTimeoutSeconds, TimeUnit.SECONDS);
-                diag(cfg, "gemini slot=" + slot + " success ms=" + (System.currentTimeMillis() - started));
+                diag(cfg, "gemini slot=" + slot + " success kind=" + answer.kind + " ms=" + (System.currentTimeMillis() - started));
                 return answer;
             } catch (TimeoutException ex) { last = ex; diag(cfg, "gemini slot=" + slot + " timeout"); }
             catch (Exception ex) {
                 Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                if (cause instanceof StopRotation) {
+                    diag(cfg, "gemini slot=" + slot + " response_invalid category=" + cause.getMessage());
+                    return new Answer("UNCLEAR", "");
+                }
                 last = ex;
-                diag(cfg, "gemini slot=" + slot + " failure=" + cause.getMessage());
+                diag(cfg, "gemini slot=" + slot + " failure=" + errorCategory(cause));
             } finally {
                 pending.cancel(true);
                 HttpURLConnection conn = activeConnection.get();
@@ -801,16 +872,30 @@ public final class CaptureModule {
                 byte[] b = new byte[8192]; int n;
                 while ((n = in.read(b)) >= 0) { response.write(b, 0, n); if (response.size() > 1048576) throw new Exception("Respons terlalu besar"); }
             }
-            JSONObject envelope = new JSONObject(response.toString("UTF-8"));
-            String text = envelope.getJSONArray("candidates").getJSONObject(0)
-                    .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
-            return parseAnswer(new JSONObject(text));
+            try {
+                JSONObject envelope = new JSONObject(response.toString("UTF-8"));
+                String text = envelope.getJSONArray("candidates").getJSONObject(0)
+                        .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text");
+                return parseAnswer(new JSONObject(text));
+            } catch (JSONException ex) { throw new StopRotation("response_schema"); }
         } finally { conn.disconnect(); }
     }
 
     private Answer parseAnswer(JSONObject obj) throws JSONException {
+        String controlType = obj.optString("controlType", "UNKNOWN");
+        String questionType = obj.optString("questionType", "UNKNOWN");
         String kind = obj.optString("type", "UNCLEAR");
-        if (kind.equals("UNCLEAR")) return new Answer(kind, "");
+        if (kind.equals("UNCLEAR") || questionType.equals("UNKNOWN") || controlType.equals("UNKNOWN")) return new Answer("UNCLEAR", "");
+        if ((controlType.equals("RADIO") && !questionType.equals("SINGLE"))
+                || (controlType.equals("CHECKBOX") && !questionType.equals("MULTI"))
+                || (controlType.equals("TEXTAREA") && !questionType.equals("ESSAY"))
+                || (!controlType.equals("RADIO") && !controlType.equals("CHECKBOX") && !controlType.equals("TEXTAREA")))
+            return new Answer("UNCLEAR", "");
+        if ((questionType.equals("SINGLE") && !kind.equals("MULTIPLE_CHOICE"))
+                || (questionType.equals("MULTI") && !kind.equals("MULTIPLE_SELECT"))
+                || (questionType.equals("ESSAY") && !kind.equals("FREE_RESPONSE"))
+                || (!questionType.equals("SINGLE") && !questionType.equals("MULTI") && !questionType.equals("ESSAY")))
+            return new Answer("UNCLEAR", "");
         if (kind.equals("FREE_RESPONSE")) {
             String answer = obj.getString("answer").trim();
             if (answer.isEmpty() || answer.length() > 12000) throw new JSONException("Esai kosong atau terlalu panjang");
@@ -820,15 +905,16 @@ public final class CaptureModule {
         JSONArray values = obj.getJSONArray("answers");
         if (values.length() < 1 || values.length() > 5 || (kind.equals("MULTIPLE_CHOICE") && values.length() != 1))
             throw new JSONException("Jumlah pilihan tidak valid");
-        StringBuilder text = new StringBuilder();
+        if (kind.equals("MULTIPLE_SELECT") && values.length() < 2) return new Answer("UNCLEAR", "");
         boolean[] seen = new boolean[6];
         for (int i = 0; i < values.length(); i++) {
             int v = values.getInt(i);
             if (v < 1 || v > 5 || seen[v]) throw new JSONException("Pilihan tidak valid");
+            if (v == 5 && obj.optBoolean("option5Placeholder", false)) return new Answer("UNCLEAR", "");
             seen[v] = true;
-            if (i > 0) text.append(',');
-            text.append(v);
         }
+        StringBuilder text = new StringBuilder();
+        for (int v = 1; v <= 5; v++) if (seen[v]) { if (text.length() > 0) text.append(','); text.append(v); }
         return new Answer(kind, text.toString());
     }
 
@@ -841,6 +927,7 @@ public final class CaptureModule {
         int badgeTextSizeSp;
         int badgeDurationMs;
         int badgeBottomOffsetDp;
+        int badgeXPercent, badgeYPercent, dotVerticalGapDp, dotHorizontalGapDp;
         float buttonOpacity;
         int buttonSizeDp;
         String buttonSide;

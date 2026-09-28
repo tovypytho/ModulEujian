@@ -1,10 +1,14 @@
 # ModulEujian
 
-Modul Android kecil yang berjalan **di dalam proses dan jendela Activity E-Ujian**. Source ScreenPilot2 dipakai sebagai referensi alur; modul ini tidak memasang aplikasi, service tangkapan layar, atau overlay sistem kedua.
+Modul Android yang berjalan **di dalam proses dan jendela Activity E-Ujian**, dipasangkan dengan aplikasi Settings terpisah. Source ScreenPilot2 dipakai sebagai referensi alur. Versi terbaru menyediakan MediaProjection melalui foreground service milik Settings, dengan capture WebView dalam proses E-Ujian sebagai fallback.
+
+## Checkpoint terbaru
+
+Lihat [CHECKPOINT_2026-09-28.md](CHECKPOINT_2026-09-28.md) untuk pasangan APK terbaru yang dilaporkan stabil oleh pengguna, hash, riwayat perubahan, dan batasan uji. Pertahankan APK basis dan dokumentasi sebelumnya sebagai acuan; jangan mengganti jalur gate atau PairIP ketika mengembangkan capture.
 
 ## Status
 
-Source berhasil dikompilasi menjadi DEX dan diintegrasikan ke kandidat APK lokal. Verifikasi statis lulus: package/version dan sertifikat sama dengan basis; manifest serta seluruh native library identik; satu-satunya perubahan kode basis adalah panggilan `CaptureModule.install()` di `MainActivity.onCreate()`. **Kandidat sebelumnya telah diuji pada Vivo Android 15 non-root: startup, portal siswa, paste esai, capture satu dan dua tahap, penyimpanan gambar, serta Gemini dan clipboard esai berhasil. Kandidat dengan badge bawah dan aplikasi pengaturan sudah terpasang tanpa crash. Pemilih berkas membuka config aktif, penyimpanan mempertahankan model dan satu key aktif, dan E-Ujian dapat dibuka ulang. Portal siswa serta jawaban Gemini pada build terbaru dan Android 13 belum diuji.** APK basis dan keystore tidak disimpan di repositori ini.
+Source berhasil dikompilasi menjadi DEX dan diintegrasikan ke kandidat APK lokal. Package/version, sertifikat, kode gate, dan pustaka native dibandingkan dengan basis. Kode basis hanya menerima hook `CaptureModule.install()`; manifest menambahkan query Settings provider dan izin signature untuk service pasangan. **Pasangan APK pada checkpoint 28 September 2026 dilaporkan stabil oleh pengguna pada Vivo non-root, termasuk akses portal tanpa dialog gate.** Hasil uji perangkat yang belum dilakukan dicatat di dokumen checkpoint. APK basis dan keystore tidak disimpan di repositori ini.
 
 Basis yang dipakai: `E-Ujian_paste_focus_no_secure_candidate.apk`, SHA-256 `F23B7C5AE44BE920FA0BB28979DC0CC4B3AF9E5D1AB0FF4467381CE7B7D74D1C`.
 
@@ -13,7 +17,7 @@ Basis yang dipakai: `E-Ujian_paste_focus_no_secure_candidate.apk`, SHA-256 `F23B
 - Ketuk tombol `◎`: simpan satu tangkapan viewport E-Ujian ke `Pictures/E-Ujian/`, lalu analisis dengan Gemini.
 - Tekan lama pertama: simpan tahap 1. Gulir soal. Tekan lama kedua: simpan tahap 2 lalu kirim kedua gambar dalam satu permintaan. Tahap tertunda kedaluwarsa setelah dua menit.
 - Badge kecil di bawah menampilkan angka `1–5` untuk pilihan tunggal, `1,2` untuk pilihan jamak, `✓` saat esai sudah disalin, dan `?` bila soal belum jelas. Status singkat: `…` sedang memproses, `1/2` tahap pertama tersimpan, `KEY` API key belum diisi, `CFG` konfigurasi bermasalah, `IMG` tangkapan gagal, `HTTP NNN` kegagalan jaringan, `!` kesalahan lain.
-- Tombol dan hasil adalah View dalam jendela Activity yang sama. Saat `PixelCopy` berjalan, View modul disembunyikan sementara. Modul menyalin `FlutterSurfaceView` lalu menggambar WebView yang tertanam di atasnya; menyalin Window langsung menghasilkan gambar hitam pada Vivo V2247. Capture hanya mencakup viewport yang sedang terlihat, bukan seluruh halaman gulir.
+- Tombol dan hasil adalah View dalam jendela Activity yang sama. MediaProjection dari Settings adalah pilihan utama saat service siap; jalur lama menyalin `FlutterSurfaceView` lalu menggambar WebView tertanam sebagai fallback. Capture satu kali hanya mencakup viewport yang terlihat; dua tahap digunakan untuk halaman panjang.
 - Seluruh tangkapan disimpan ke album, termasuk ketika analisis jaringan gagal.
 
 ## Konfigurasi non-root

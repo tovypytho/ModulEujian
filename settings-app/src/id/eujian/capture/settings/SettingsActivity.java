@@ -354,6 +354,7 @@ public final class SettingsActivity extends Activity {
                 start.putExtra("resultCode", result); start.putExtra("resultData", data);
                 if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(start); else startService(start);
                 if (projectionStatus != null) projectionStatus.setText("REQUESTING_PERMISSION / STARTING");
+                new android.os.Handler().postDelayed(() -> { if (projectionStatus != null) projectionStatus.setText(projectionStatusText()); }, 1500);
             } else if (projectionStatus != null) projectionStatus.setText("REQUIRES_REAUTH");
             return;
         }

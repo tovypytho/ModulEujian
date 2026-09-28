@@ -524,8 +524,11 @@ public final class CaptureModule {
             dots.setVisibility(View.GONE);
             status.setText(message);
             status.setVisibility(View.VISIBLE);
+            status.bringToFront();
+            status.setElevation(dp(12));
             placeBadge(status);
             ui.removeCallbacks(hideStatus);
+            android.util.Log.i("EujianCapture", "badge_show kind=" + badgeKind(message));
         });
     }
 
@@ -538,8 +541,20 @@ public final class CaptureModule {
             status.setVisibility(View.GONE);
             dots.configure(values, config.dotVerticalGapDp, config.dotHorizontalGapDp, config.badgeTextSizeSp);
             dots.setVisibility(View.VISIBLE);
+            dots.bringToFront();
+            dots.setElevation(dp(12));
             placeBadge(dots);
+            android.util.Log.i("EujianCapture", "badge_show kind=dots");
         });
+    }
+
+    private String badgeKind(String message) {
+        if ("1/2".equals(message)) return "stage1";
+        if ("…".equals(message)) return "processing";
+        if ("✓".equals(message)) return "essay_copied";
+        if ("?".equals(message)) return "unclear";
+        if (message.matches("[1-5](,[1-5])*")) return "numeric";
+        return "status";
     }
 
     private void dismissBadge() { status.setVisibility(View.GONE); dots.setVisibility(View.GONE); }
@@ -558,7 +573,13 @@ public final class CaptureModule {
             lp.gravity = Gravity.TOP | Gravity.LEFT;
             lp.leftMargin = margin + Math.round(travelX * config.badgeXPercent / 100f);
             lp.topMargin = margin + Math.round(travelY * config.badgeYPercent / 100f);
+            lp.rightMargin = 0;
+            lp.bottomMargin = 0;
             badge.setLayoutParams(lp);
+            android.util.Log.i("EujianCapture", "badge_place kind=" + (badge == dots ? "dots" : "text")
+                    + " x=" + lp.leftMargin + " y=" + lp.topMargin + " w=" + badge.getMeasuredWidth()
+                    + " h=" + badge.getMeasuredHeight() + " decorW=" + decor.getWidth()
+                    + " decorH=" + decor.getHeight() + " visible=" + badge.getVisibility());
         });
     }
 
@@ -574,9 +595,12 @@ public final class CaptureModule {
         placeBadge(status);
         placeBadge(dots);
         button.setAlpha(config.buttonOpacity);
-        button.setBackground(round(config.buttonColor, 28));
+        int touchSizeDp = Math.max(48, config.buttonSizeDp);
+        int visualInset = dp((touchSizeDp - config.buttonSizeDp) / 2);
+        button.setBackground(new android.graphics.drawable.InsetDrawable(round(config.buttonColor, 28), visualInset));
+        button.setTextSize(Math.min(30, config.buttonSizeDp - 4));
         FrameLayout.LayoutParams bp = (FrameLayout.LayoutParams) button.getLayoutParams();
-        bp.width = bp.height = dp(config.buttonSizeDp);
+        bp.width = bp.height = dp(touchSizeDp);
         bp.gravity = (config.buttonSide.equals("left") ? Gravity.LEFT : Gravity.RIGHT) | Gravity.CENTER_VERTICAL;
         bp.leftMargin = config.buttonSide.equals("left") ? dp(8) : 0;
         bp.rightMargin = config.buttonSide.equals("right") ? dp(8) : 0;
@@ -605,8 +629,15 @@ public final class CaptureModule {
         if (message.contains("Isi API key")) return "KEY";
         java.util.regex.Matcher http = java.util.regex.Pattern.compile("HTTP [0-9]{3}").matcher(message);
         if (http.find()) return http.group();
-        if (message.contains("Semua key")) return "KEY!";
+        if (message.startsWith("Semua ") && message.contains("slot gagal")) return "API";
         return "!";
+    }
+    private int httpStatus(Throwable ex) {
+        if (ex.getCause() != null && ex.getCause() != ex) return httpStatus(ex.getCause());
+        String message = ex.getMessage();
+        if (message == null) return 0;
+        java.util.regex.Matcher match = java.util.regex.Pattern.compile("HTTP ([0-9]{3})").matcher(message);
+        return match.find() ? Integer.parseInt(match.group(1)) : 0;
     }
     private String errorCategory(Throwable ex) {
         if (ex.getCause() != null && ex.getCause() != ex) return errorCategory(ex.getCause());
@@ -843,7 +874,8 @@ public final class CaptureModule {
                     return new Answer("UNCLEAR", "");
                 }
                 last = ex;
-                diag(cfg, "gemini slot=" + slot + " failure=" + errorCategory(cause));
+                diag(cfg, "gemini slot=" + slot + " failure=" + errorCategory(cause)
+                        + " httpStatus=" + httpStatus(cause));
             } finally {
                 pending.cancel(true);
                 HttpURLConnection conn = activeConnection.get();

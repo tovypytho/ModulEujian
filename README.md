@@ -4,7 +4,7 @@ Modul Android yang berjalan **di dalam proses dan jendela Activity E-Ujian**, di
 
 ## Checkpoint terbaru
 
-Lihat [CHECKPOINT_2026-09-28.md](CHECKPOINT_2026-09-28.md) untuk pasangan APK terbaru yang dilaporkan stabil oleh pengguna, hash, riwayat perubahan, dan batasan uji. Pertahankan APK basis dan dokumentasi sebelumnya sebagai acuan; jangan mengganti jalur gate atau PairIP ketika mengembangkan capture.
+Checkpoint rollback utama sekarang adalah [CHECKPOINT_SESSION_ISOLATION_2026-09-30.md](CHECKPOINT_SESSION_ISOLATION_2026-09-30.md): pasangan numerik isolasi sesi yang dikonfirmasi stabil oleh pengguna pada Vivo Android 15. Backup kedua APK, manifest SHA-256, dan snapshot source tersimpan lokal di `outputs/checkpoints/stable_session_isolation_numeric_20260930/`. Untuk permintaan kembali ke versi stabil terakhir, pilih pasangan ini. [Checkpoint 28 September](CHECKPOINT_2026-09-28.md) dan [checkpoint numerik sebelumnya](CHECKPOINT_NUMERIC_2026-09-28.md) tetap dipertahankan.
 
 ## Status
 
@@ -19,6 +19,7 @@ Basis yang dipakai: `E-Ujian_paste_focus_no_secure_candidate.apk`, SHA-256 `F23B
 - Badge kecil di bawah menampilkan angka `1–5` untuk pilihan tunggal, `1,2` untuk pilihan jamak, `✓` saat esai sudah disalin, dan `?` bila soal belum jelas. Status singkat: `…` sedang memproses, `1/2` tahap pertama tersimpan, `KEY` API key belum diisi, `CFG` konfigurasi bermasalah, `IMG` tangkapan gagal, `HTTP NNN` kegagalan jaringan, `!` kesalahan lain.
 - Tombol dan hasil adalah View dalam jendela Activity yang sama. MediaProjection dari Settings adalah pilihan utama saat service siap; jalur lama menyalin `FlutterSurfaceView` lalu menggambar WebView tertanam sebagai fallback. Capture satu kali hanya mencakup viewport yang terlihat; dua tahap digunakan untuk halaman panjang.
 - Seluruh tangkapan disimpan ke album, termasuk ketika analisis jaringan gagal.
+- Setiap trigger memakai session ID sendiri. Trigger baru membatalkan request lama, membersihkan stage/popup lama, dan hanya callback dari session terbaru yang boleh menulis popup atau clipboard. Stage pertama dapat dibawa ke trigger tekan lama kedua dalam workflow yang sama; stage dari sesi lain tidak pernah digabung.
 
 ## Konfigurasi non-root
 
@@ -49,6 +50,7 @@ Skrip memvalidasi format, menulis lewat `content://media/.../downloads/<id>`, la
 `apiKeys` menerima maksimal 10 slot. Slot awal dipilih round robin dan kursor disimpan lintas pembukaan aplikasi. Setiap kegagalan, termasuk HTTP 429, langsung mencoba slot berikutnya tanpa cooldown. `keyTimeoutSeconds` (5–45, bawaan 15) membatasi waktu tiap slot; setelah batas itu request dibatalkan dan slot berikutnya dicoba. Distribusi slot awal merata bila daftar slot aktif tetap, tetapi jumlah request berhasil bisa berbeda karena failover. JSON lama di penyimpanan publik menyimpan key sebagai teks biasa; jangan taruh key nyata di Git, log, atau laporan. Modul tidak membutuhkan root.
 
 `badge` opsional. Nilai bawaan menempatkan badge di tengah bawah, sekitar 120 dp dari tepi bawah seperti pola popup ScreenPilot. `opacity` menerima 0.15–1.0, `textSizeSp` 8–24, `durationMs` 500–10000, `bottomOffsetDp` 24–400, dan `side` `left`, `center`, atau `right`. `answerFormat` bernilai `numeric` atau `dots`; mode dots menampilkan satu blok titik vertikal untuk setiap indeks jawaban. `button` opsional: `opacity` 0.15–1.0, `sizeDp` 32–88, dan `side` `left` atau `right`. Konfigurasi lama tanpa kedua objek tetap memakai nilai bawaan.
+
 
 Saat WebView terlihat, modul menjalankan clean viewport capture. Kandidat elemen HTML fixed/sticky yang lebar, berada di tepi viewport, dan memiliki z-index tinggi disembunyikan sementara selama capture lalu dipulihkan. Jika WebView tidak ditemukan, modul memakai capture Activity lama dan mencatat fallback pada diagnostic log. Heuristik tidak menyembunyikan elemen yang tidak memenuhi semua kriteria.
 

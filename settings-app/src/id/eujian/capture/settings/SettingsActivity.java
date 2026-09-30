@@ -40,6 +40,7 @@ public final class SettingsActivity extends Activity {
     private Switch enabledSwitch;
     private Switch diagnosticSwitch;
     private Switch captureProbeSwitch;
+    private Switch mediaProjectionSwitch;
     private static final int EXPORT_LOG = 17;
     private static final int REQUEST_PROJECTION = 18;
     private TextView slotStatus, checkResults, connectionStatus, previewBadge, previewButton;
@@ -131,6 +132,7 @@ public final class SettingsActivity extends Activity {
         LinearLayout projection = card(body, "▣  MediaProjection Capture");
         projection.addView(text("Aktifkan sebelum membuka E-Ujian. Sesi dipertahankan oleh foreground service.", 13, MUTED, false));
         projectionStatus = text(projectionStatusText(), 14, LAVENDER, true); projection.addView(projectionStatus);
+        mediaProjectionSwitch = new Switch(this); mediaProjectionSwitch.setText("Gunakan MediaProjection (tanpa fallback WebView)"); mediaProjectionSwitch.setTextColor(PALE); mediaProjectionSwitch.setChecked(!"in_process".equals(config.optString("captureEngine", "media_projection"))); projection.addView(mediaProjectionSwitch);
         projection.addView(button("Aktifkan screen capture", true, this::requestProjection));
         projection.addView(button("Hentikan screen capture", false, () -> { Intent stop = new Intent(this, MediaProjectionService.class); stop.setAction(MediaProjectionService.ACTION_STOP); startService(stop); projectionStatus.setText("STOPPED"); }));
         projection.addView(button("Izinkan notifikasi", false, () -> startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()))));
@@ -286,7 +288,7 @@ public final class SettingsActivity extends Activity {
             storeCurrentSlot();
             String model = modelField.getText().toString().trim(); if (!model.matches("[A-Za-z0-9._-]{3,100}")) { toast("Nama model tidak valid"); return; }
             config.put("model", model).put("strategy", "round_robin");
-            config.put("captureEngine", config.optString("captureEngine", "auto"));
+            config.put("captureEngine", mediaProjectionSwitch != null && mediaProjectionSwitch.isChecked() ? "media_projection" : "in_process");
             config.put("keyTimeoutSeconds", keyTimeoutSeconds);
             config.put("diagnostic", diagnosticSwitch != null && diagnosticSwitch.isChecked());
             config.put("captureProbe", captureProbeSwitch != null && captureProbeSwitch.isChecked());

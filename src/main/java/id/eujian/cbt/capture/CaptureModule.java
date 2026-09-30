@@ -55,6 +55,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** A deliberately small in-process Android module. No service, overlay window or second Activity. */
@@ -69,8 +70,8 @@ public final class CaptureModule {
     private final TextView status;
     private final Runnable hideStatus;
     private volatile boolean busy;
-    private volatile byte[] staged;
-    private volatile long stagedAt;
+    private volatile Session activeSession;
+    private long nextSessionId = 1;
     private long touchDown;
     private int keyCursor;
     private Runnable pendingWebRestore = () -> {};
@@ -170,51 +171,63 @@ public final class CaptureModule {
 
     private void onTrigger(long duration) {
         attachDismissListener((View) activity.getWindow().getDecorView());
-        if (busy) { show("…", 2500); return; }
         final Config config;
         try { config = readConfig(); }
         catch (Exception ex) { show("CFG", 6500); return; }
-        diag(config, "trigger durationMs=" + duration + " long=" + (duration >= config.longPressMs) + " thresholdMs=" + config.longPressMs
-                + " staged=" + (staged != null) + " busy=" + busy);
-        applyAppearance(config);
         boolean longPress = duration >= config.longPressMs;
-        if (!longPress) staged = null;
-        if (staged != null && System.currentTimeMillis() - stagedAt > 120000L) { diag(config, "stage_expired ageMs=" + (System.currentTimeMillis() - stagedAt)); staged = null; }
-        final boolean stageTwo = longPress && staged != null;
+        Session previous = activeSession;
+        byte[] carriedStage = null;
+        long carriedAt = 0;
+        if (longPress && previous != null && previous.staged != null && System.currentTimeMillis() - previous.stagedAt <= 120000L) {
+            carriedStage = previous.staged;
+            carriedAt = previous.stagedAt;
+        }
+        if (previous != null) cancelSession(previous, "session_replaced_by_new_trigger");
+        final Session session = new Session(++nextSessionId);
+        session.config = config;
+        session.staged = carriedStage;
+        session.stagedAt = carriedAt;
+        activeSession = session;
+        diag(config, "session_start id=" + session.id + " trigger durationMs=" + duration + " long=" + (duration >= config.longPressMs) + " thresholdMs=" + config.longPressMs);
+        applyAppearance(config);
+        final boolean stageTwo = longPress && session.staged != null;
         busy = true;
         button.setVisibility(View.INVISIBLE);
         status.setVisibility(View.INVISIBLE);
         FrameLayout decor = (FrameLayout) activity.getWindow().getDecorView();
         // Give the window a frame to draw without either of our views.
-        decor.postDelayed(() -> capture(config, longPress, stageTwo), 50);
+        decor.postDelayed(() -> { if (isActive(session)) capture(session, config, longPress, stageTwo); }, 50);
     }
 
-    private void capture(Config config, boolean longPress, boolean stageTwo) {
+    private void capture(Session session, Config config, boolean longPress, boolean stageTwo) {
+        if (!isActive(session)) return;
         if (!"in_process".equals(config.captureEngine)) {
-            requestProjectionFrame(config, longPress, stageTwo);
+            requestProjectionFrame(session, config, longPress, stageTwo);
             return;
         }
-        captureInProcess(config, longPress, stageTwo);
+        captureInProcess(session, config, longPress, stageTwo);
     }
 
-    private void captureInProcess(Config config, boolean longPress, boolean stageTwo) {
+    private void captureInProcess(Session session, Config config, boolean longPress, boolean stageTwo) {
+        if (!isActive(session)) return;
         View decor = activity.getWindow().getDecorView();
         WebView web = findLargestWebView(decor);
         if (web != null) {
-            prepareWebView(web, config, () -> capturePrepared(config, longPress, stageTwo, web));
+            prepareWebView(web, config, () -> { if (isActive(session)) capturePrepared(session, config, longPress, stageTwo, web); });
             return;
         }
         diag(config, "capture fallback=no_webview");
-        capturePrepared(config, longPress, stageTwo, null);
+        capturePrepared(session, config, longPress, stageTwo, null);
     }
 
-    private void requestProjectionFrame(Config config, boolean longPress, boolean stageTwo) {
+    private void requestProjectionFrame(Session session, Config config, boolean longPress, boolean stageTwo) {
         Intent intent = new Intent(); intent.setComponent(new ComponentName("id.eujian.capture.settings", "id.eujian.capture.settings.MediaProjectionService"));
         final ServiceConnection[] connectionHolder = new ServiceConnection[1];
         ServiceConnection connection = new ServiceConnection() {
             public void onServiceConnected(ComponentName name, IBinder binder) {
                 worker.execute(() -> {
                     try {
+                        if (!isActive(session)) return;
                         Parcel statusData = Parcel.obtain(), statusReply = Parcel.obtain();
                         binder.transact(PROJECTION_STATUS, statusData, statusReply, 0);
                         boolean ready = statusReply.readInt() == 1; statusData.recycle(); statusReply.recycle();
@@ -229,12 +242,14 @@ public final class CaptureModule {
                         Bitmap bitmap = BitmapFactory.decodeByteArray(bytes.toByteArray(), 0, bytes.size());
                         if (bitmap == null) throw new Exception("frame_decode_failed");
                         activity.runOnUiThread(() -> { try { activity.unbindService(connectionHolder[0]); } catch (Exception ignored) {} });
-                        processCapture(bitmap, config, longPress, stageTwo);
+                        if (!isActive(session)) { diag(config, "request_callback_discarded_stale_session id=" + session.id); return; }
+                        processCapture(session, bitmap, config, longPress, stageTwo);
                     } catch (Exception ex) {
                         activity.runOnUiThread(() -> { try { activity.unbindService(connectionHolder[0]); } catch (Exception ignored) {} });
                         diag(config, "capture_engine=media_projection unavailable=" + ex.getClass().getSimpleName());
-                        if ("auto".equals(config.captureEngine)) activity.runOnUiThread(() -> captureInProcess(config, longPress, stageTwo));
-                        else { busy = false; activity.runOnUiThread(() -> button.setVisibility(View.VISIBLE)); show("MP", 6500); }
+                        if (!isActive(session)) return;
+                        if ("auto".equals(config.captureEngine)) activity.runOnUiThread(() -> captureInProcess(session, config, longPress, stageTwo));
+                        else { busy = false; activity.runOnUiThread(() -> button.setVisibility(View.VISIBLE)); showFor(session, "X", 6500); }
                     }
                 });
             }
@@ -245,20 +260,21 @@ public final class CaptureModule {
             if (!activity.bindService(intent, connection, Context.BIND_AUTO_CREATE)) throw new Exception("bind_failed");
         } catch (Exception ex) {
             diag(config, "capture_engine=media_projection bind_failed");
-            if ("auto".equals(config.captureEngine)) captureInProcess(config, longPress, stageTwo); else { busy = false; button.setVisibility(View.VISIBLE); show("MP", 6500); }
+            if ("auto".equals(config.captureEngine)) captureInProcess(session, config, longPress, stageTwo); else { busy = false; button.setVisibility(View.VISIBLE); showFor(session, "X", 6500); }
         }
     }
 
-    private void capturePrepared(Config config, boolean longPress, boolean stageTwo, WebView web) {
+    private void capturePrepared(Session session, Config config, boolean longPress, boolean stageTwo, WebView web) {
+        if (!isActive(session)) return;
         View decor = activity.getWindow().getDecorView();
         int w = decor.getWidth();
         int h = decor.getHeight();
         diag(config, "view decor=" + w + "x" + h + " api=" + Build.VERSION.SDK_INT + " density=" + activity.getResources().getDisplayMetrics().density);
-        if (w < 1 || h < 1) { button.setVisibility(View.VISIBLE); busy = false; show("IMG", 3000); return; }
+        if (w < 1 || h < 1) { button.setVisibility(View.VISIBLE); busy = false; showFor(session, "X", 3000); return; }
         final SurfaceView surface = findSurface(decor);
         int sourceWidth = surface == null ? w : surface.getWidth();
         int sourceHeight = surface == null ? h : surface.getHeight();
-        if (sourceWidth < 1 || sourceHeight < 1) { button.setVisibility(View.VISIBLE); busy = false; show("IMG", 3000); return; }
+        if (sourceWidth < 1 || sourceHeight < 1) { button.setVisibility(View.VISIBLE); busy = false; showFor(session, "X", 3000); return; }
         final Bitmap source = Bitmap.createBitmap(sourceWidth, sourceHeight, Bitmap.Config.ARGB_8888);
         try {
             PixelCopy.OnPixelCopyFinishedListener listener = result -> ui.post(() -> {
@@ -267,7 +283,7 @@ public final class CaptureModule {
                     restorePendingWebView();
                     source.recycle();
                     busy = false;
-                    show("IMG", 5500);
+                    showFor(session, "X", 5500);
                     return;
                 }
                 Bitmap composed;
@@ -277,7 +293,7 @@ public final class CaptureModule {
                     restorePendingWebView();
                     source.recycle();
                     busy = false;
-                    show("IMG", 5500);
+                    showFor(session, "X", 5500);
                     return;
                 }
                 if (config.captureProbe) {
@@ -291,7 +307,7 @@ public final class CaptureModule {
                     source.recycle();
                     composed.recycle();
                     busy = false;
-                    show("IMG", 5500);
+                    showFor(session, "X", 5500);
                     return;
                 }
                 final Bitmap captured = composed;
@@ -302,7 +318,8 @@ public final class CaptureModule {
                 worker.execute(() -> {
                     if (probe != null) saveDiagnosticBitmap(probe, config, "surface_composite");
                     if (config.captureProbe) diag(config, "probe renderer=direct_webview " + bitmapStats(captured));
-                    processCapture(captured, config, longPress, stageTwo);
+                    if (isActive(session)) processCapture(session, captured, config, longPress, stageTwo);
+                    else { captured.recycle(); diag(config, "capture_callback_discarded_stale_session id=" + session.id); }
                 });
             });
             Handler handler = new Handler(pixelThread.getLooper());
@@ -313,7 +330,7 @@ public final class CaptureModule {
             source.recycle();
             button.setVisibility(View.VISIBLE);
             busy = false;
-            show("IMG", 5500);
+            showFor(session, "X", 5500);
         }
     }
 
@@ -463,7 +480,8 @@ public final class CaptureModule {
         return dark > total * 95 / 100;
     }
 
-    private void processCapture(Bitmap bitmap, Config config, boolean longPress, boolean stageTwo) {
+    private void processCapture(Session session, Bitmap bitmap, Config config, boolean longPress, boolean stageTwo) {
+        if (!isActive(session)) { bitmap.recycle(); diag(config, "capture_callback_discarded_stale_session id=" + session.id); return; }
         ui.post(() -> button.setVisibility(View.VISIBLE));
         diag(config, "capture stageTwo=" + stageTwo + " bytesPending");
         try {
@@ -475,42 +493,53 @@ public final class CaptureModule {
             diag(config, "jpeg stage=" + (stageTwo ? "stage2" : longPress ? "stage1" : "single") + " bytes=" + jpeg.length + " quality=" + config.jpegQuality);
             saveImage(jpeg, stageTwo ? "stage2" : longPress ? "stage1" : "single");
             if (longPress && !stageTwo) {
-                staged = jpeg;
-                stagedAt = System.currentTimeMillis();
+                session.staged = jpeg;
+                session.stagedAt = System.currentTimeMillis();
                 diag(config, "stage_saved stage=stage1 ageMs=0");
                 busy = false;
-                show("1/2", 6000);
+                showFor(session, "1/2", 6000);
                 return;
             }
             ArrayList<byte[]> images = new ArrayList<>();
-            if (stageTwo) images.add(staged);
+            if (stageTwo) {
+                if (session.staged == null) throw new Exception("stage_missing");
+                images.add(session.staged);
+            }
             images.add(jpeg);
-            staged = null;
+            session.staged = null;
             int totalBytes = 0; for (byte[] image : images) totalBytes += image.length;
             diag(config, "gemini_request images=" + images.size() + " totalBytes=" + totalBytes + " stageTwo=" + stageTwo);
-            show("…", 15000);
-            Answer answer = askGemini(config, images);
+            showFor(session, "...", 15000);
+            Answer answer = askGemini(session, config, images);
+            if (!isActive(session)) { diag(config, "request_callback_discarded_stale_session id=" + session.id); return; }
             diag(config, "gemini success kind=" + answer.kind + " images=" + images.size());
             if (answer.kind.equals("FREE_RESPONSE")) {
                 activity.runOnUiThread(() -> {
                     ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-                    clipboard.setPrimaryClip(ClipData.newPlainText("Jawaban esai", answer.text));
+                    if (isActive(session)) clipboard.setPrimaryClip(ClipData.newPlainText("Jawaban esai", answer.text));
+                    else diag(config, "clipboard_discarded_stale_session id=" + session.id);
                 });
-                show("✓", 7000);
+                showFor(session, "✓", 7000);
                 diag(config, "badge_show category=essay_copied clipboard=success");
             } else if (answer.kind.equals("UNCLEAR")) {
-                show("?", 6500);
+                showFor(session, "?", 6500);
                 diag(config, "badge_show category=unclear");
             } else {
-                show(formatAnswer(answer.text, config), 9000);
+                showFor(session, formatAnswer(answer.text, config), 9000);
                 diag(config, "badge_show category=numeric");
             }
         } catch (Exception ex) {
             diag(config, "analysis_error category=" + errorCategory(ex) + " exception=" + ex.getClass().getSimpleName());
-            show(errorBadge(ex), 7000);
+            if (isActive(session)) showFor(session, errorBadge(ex), 7000);
+            else diag(config, "popup_discarded_stale_session id=" + session.id);
         } finally {
-            busy = false;
-            ui.post(() -> button.setVisibility(View.VISIBLE));
+            if (isActive(session)) {
+                busy = false;
+                ui.post(() -> button.setVisibility(View.VISIBLE));
+                diag(config, "session_complete id=" + session.id);
+            } else {
+                diag(config, "session_callback_discarded_stale_session id=" + session.id);
+            }
         }
     }
 
@@ -520,6 +549,32 @@ public final class CaptureModule {
             status.setVisibility(View.VISIBLE);
             ui.removeCallbacks(hideStatus);
         });
+    }
+
+    private void showFor(Session session, String message, long ms) {
+        if (!isActive(session)) return;
+        ui.post(() -> {
+            if (!isActive(session)) { return; }
+            status.setText(message);
+            status.setVisibility(View.VISIBLE);
+            ui.removeCallbacks(hideStatus);
+            ui.postDelayed(() -> { if (isActive(session)) status.setVisibility(View.GONE); }, ms);
+        });
+    }
+
+    private boolean isActive(Session session) { return session != null && !session.cancelled && activeSession == session; }
+
+    private void cancelSession(Session session, String reason) {
+        if (session == null || session.cancelled) return;
+        session.cancelled = true;
+        session.staged = null;
+        Future<?> future = session.requestFuture;
+        if (future != null) future.cancel(true);
+        HttpURLConnection conn = session.connection.get();
+        if (conn != null) conn.disconnect();
+        diag(session.config, reason + " id=" + session.id);
+        ui.removeCallbacks(hideStatus);
+        status.setVisibility(View.GONE);
     }
 
     private void applyAppearance(Config config) {
@@ -750,7 +805,8 @@ public final class CaptureModule {
         }
     }
 
-    private Answer askGemini(Config cfg, ArrayList<byte[]> images) throws Exception {
+    private Answer askGemini(Session session, Config cfg, ArrayList<byte[]> images) throws Exception {
+        if (!isActive(session)) throw new CancellationException();
         if (cfg.keys.isEmpty()) throw new Exception("Isi API key pada config.json");
         JSONObject request = new JSONObject();
         JSONArray parts = new JSONArray();
@@ -776,15 +832,18 @@ public final class CaptureModule {
         activity.getPreferences(Context.MODE_PRIVATE).edit().putInt("gemini_key_cursor", keyCursor).apply();
         Exception last = null;
         for (int i = 0; i < cfg.keys.size(); i++) {
+            if (!isActive(session)) throw new CancellationException();
             int index = (start + i) % cfg.keys.size();
             String key = cfg.keys.get(index);
             int slot = cfg.keySlots.get(index);
-            AtomicReference<HttpURLConnection> activeConnection = new AtomicReference<>();
+            AtomicReference<HttpURLConnection> activeConnection = session.connection;
             long started = System.currentTimeMillis();
             Future<Answer> pending = requests.submit(() -> requestGemini(endpoint, key, payload, activeConnection));
+            session.requestFuture = pending;
             try {
                 Answer answer = pending.get(cfg.keyTimeoutSeconds, TimeUnit.SECONDS);
                 diag(cfg, "gemini slot=" + slot + " success ms=" + (System.currentTimeMillis() - started));
+                if (!isActive(session)) throw new CancellationException();
                 return answer;
             } catch (TimeoutException ex) { last = ex; diag(cfg, "gemini slot=" + slot + " timeout"); }
             catch (Exception ex) {
@@ -888,6 +947,16 @@ public final class CaptureModule {
         boolean captureProbe;
         final ArrayList<String> keys = new ArrayList<>();
         final ArrayList<Integer> keySlots = new ArrayList<>();
+    }
+    private static final class Session {
+        final long id;
+        volatile boolean cancelled;
+        volatile byte[] staged;
+        volatile long stagedAt;
+        volatile Config config;
+        volatile Future<?> requestFuture;
+        final AtomicReference<HttpURLConnection> connection = new AtomicReference<>();
+        Session(long id) { this.id = id; }
     }
     private static final class Answer {
         final String kind, text;
